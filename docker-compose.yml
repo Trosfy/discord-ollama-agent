@@ -1,0 +1,120 @@
+services:
+  logging-service:
+    build: ./logging-service
+    container_name: trollama-logging
+    volumes:
+      - ./logs:/app/logs
+      - ./shared:/shared
+    ports:
+      - "9999:9999"
+      - "9998:9998"  # Health check port
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9998/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: trollama-dynamodb
+    ports:
+      - "8000:8000"
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/8000' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  fastapi-service:
+    build: ./fastapi-service
+    container_name: trollama-fastapi
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    environment:
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      - LOGGING_HOST=logging-service
+      - LOGGING_PORT=9999
+      - PYTHONPATH=/shared
+      - OLLAMA_KEEP_ALIVE=0  # Unload models immediately to save memory
+    volumes:
+      - ./fastapi-service:/app
+      - ./shared:/shared
+      - temp-files:/tmp/discord-bot-artifacts
+      - temp-files:/tmp/discord-bot-uploads
+    depends_on:
+      dynamodb-local:
+        condition: service_healthy
+      logging-service:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  discord-bot:
+    build: ./discord-bot
+    container_name: trollama-discord-bot
+    env_file:
+      - .env
+    environment:
+      - FASTAPI_WS_URL=ws://fastapi-service:8000/ws/discord
+      - LOGGING_HOST=logging-service
+      - LOGGING_PORT=9999
+      - PYTHONPATH=/shared
+    ports:
+      - "9997:9998"  # Health check port (external:internal)
+    volumes:
+      - ./discord-bot:/app
+      - ./shared:/shared
+      - temp-files:/tmp/discord-bot-artifacts
+      - temp-files:/tmp/discord-bot-uploads
+    depends_on:
+      fastapi-service:
+        condition: service_healthy
+      logging-service:
+        condition: service_healthy
+    restart: unless-stopped
+    # Health endpoint checks WebSocket connection status
+
+  monitoring-service:
+    build: ./monitoring-service
+    container_name: trollama-monitor
+    ports:
+      - "8080:8080"  # Dashboard
+    volumes:
+      - ./monitoring-service/data:/app/data
+      - ./shared:/shared
+      - ./logs:/app/logs  # Mount logs directory for cleanup access
+    environment:
+      - LOGGING_HOST=logging-service
+      - LOGGING_PORT=9999
+      - PYTHONPATH=/shared
+    depends_on:
+      logging-service:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  dynamodb_data:
+    driver: local
+  temp-files:
+    driver: local
+
+networks:
+  default:
+    name: trollama-network

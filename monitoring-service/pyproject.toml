@@ -1,0 +1,17 @@
+[project]
+name = "trollama-monitoring-service"
+version = "0.1.0"
+description = "Monitoring and health dashboard for Discord Trollama Agent"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.104.1",
+    "uvicorn>=0.24.0",
+    "aiohttp>=3.9.1",
+    "jinja2>=3.1.2",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0"
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
