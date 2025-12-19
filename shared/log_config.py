@@ -13,7 +13,7 @@ class LogSettings(BaseSettings):
     LOG_DATE_FORMAT: str = "%Y-%m-%d"  # Format for date directories (e.g., "2025-12-11")
 
     # Retention settings
-    LOG_RETENTION_DAYS: int = 2  # Delete logs older than this
+    LOG_RETENTION_DAYS: int = 2  # Delete logs and database records older than this
     LOG_CLEANUP_INTERVAL_HOURS: int = 6  # How often to run cleanup (every 6 hours)
 
     # Rotation settings (per-file within each date directory)

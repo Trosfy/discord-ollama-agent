@@ -1,0 +1,6 @@
+TOOL USAGE RULES:
+
+FILE UPLOADS - list_attachments and get_file_content tools:
+- Use list_attachments to see what files user uploaded
+- Use get_file_content(file_id) to read file contents
+- The file content is already extracted (OCR for images, direct read for text/code)

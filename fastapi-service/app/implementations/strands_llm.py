@@ -17,6 +17,7 @@ from app.interfaces.llm import LLMInterface
 from app.config import settings, get_model_capabilities
 from app.utils.model_utils import get_ollama_keep_alive
 from app.streaming import StreamProcessor, StreamFilter, StreamLogger
+from app.prompts import PromptComposer
 import logging_client
 
 # Initialize logger
@@ -225,6 +226,10 @@ class StrandsLLM(LLMInterface):
         self.base_fetch_webpage = fetch_webpage  # Store reference for wrapper
         self.custom_tools = [web_search, fetch_webpage, list_attachments, get_file_content]
         logger.info("✅ Custom tools initialized (web_search, fetch_webpage, list_attachments, get_file_content)")
+
+        # Initialize prompt composer (modular prompt architecture)
+        self.prompt_composer = PromptComposer()
+        logger.info("✅ PromptComposer initialized (modular prompt system)")
 
         # Token counter (approximate)
         self.encoder = tiktoken.encoding_for_model("gpt-3.5-turbo")
@@ -1032,9 +1037,10 @@ You're a helpful Discord assistant with web search tools. For research: web_sear
         user_base_prompt: Optional[str] = None
     ) -> str:
         """
-        Build system prompt using layered composition (SOLID principles).
+        Build system prompt using modular PromptComposer (REFACTORED).
 
-        Layers (in order of importance):
+        This method now delegates to PromptComposer which loads prompts
+        from JSON configs and composes them using the 5-layer architecture:
         1. ROLE & IDENTITY - Who you are
         2. CRITICAL PROTOCOLS - Special cases (file creation, thinking mode)
         3. TASK DEFINITION - What to do (route-specific)
@@ -1048,33 +1054,19 @@ You're a helpful Discord assistant with web search tools. For research: web_sear
         Returns:
             Composed system prompt with proper layer ordering
         """
-        layers = []
-
-        # LAYER 1: ROLE & IDENTITY (always included, seen FIRST)
-        layers.append(self._get_role_layer())
-
-        # LAYER 2: CRITICAL PROTOCOLS (context-aware, seen BEFORE task)
+        route = route_config.get('route')
         postprocessing = route_config.get('postprocessing', [])
 
-        if 'OUTPUT_ARTIFACT' in postprocessing:
-            layers.append(self._get_file_creation_protocol())
-
-        # TODO: Add other protocols as needed (thinking mode, tool restrictions, etc.)
-
-        # LAYER 3: TASK DEFINITION (route-specific logic)
-        route = route_config.get('route')
-        layers.append(self._get_task_layer(route))
-
-        # LAYER 4: FORMAT RULES (context-aware based on protocols)
+        # Determine format context based on postprocessing
         format_context = 'file_creation' if 'OUTPUT_ARTIFACT' in postprocessing else 'standard'
-        layers.append(self._get_format_layer(format_context))
 
-        # LAYER 5: USER CUSTOMIZATION (optional, lowest priority)
-        if user_base_prompt:
-            layers.append(f"\n\nUser Instructions:\n{user_base_prompt}")
-
-        # Compose layers with clear separation
-        return "\n\n".join(layers)
+        # Use PromptComposer for modular prompt composition
+        return self.prompt_composer.compose_route_prompt(
+            route=route,
+            postprocessing=postprocessing,
+            format_context=format_context,
+            user_base_prompt=user_base_prompt
+        )
 
     def _build_self_handle_prompt(self, current_date: str) -> str:
         """System prompt for SELF_HANDLE route (gpt-oss:20b)."""

@@ -22,7 +22,7 @@ async def main():
     db = HealthDatabase('data/health_history.db')
     alert_manager = AlertManager()
     health_checker = HealthChecker(db, alert_manager)
-    log_cleanup = LogCleanup()
+    log_cleanup = LogCleanup(database=db)
 
     # Start health checking in background
     check_task = asyncio.create_task(health_checker.monitor_loop())

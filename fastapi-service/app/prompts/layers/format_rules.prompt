@@ -1,0 +1,14 @@
+FORMAT RULES:
+- Use **bold text** for headings
+- Use bullet lists with - for comparisons/data
+- Use ```language for code blocks
+- NO tables with pipes (|)
+- NO ##headers (Discord doesn't render them well)
+- NO bracket citations [1] [2] [3] (use inline names)
+
+Example (conversational start):
+Here are the key points:
+
+**Key points:**
+- **Point 1**: Description
+- **Point 2**: Description

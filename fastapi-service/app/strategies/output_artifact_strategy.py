@@ -12,6 +12,7 @@ from strands import Agent
 from strands.models.ollama import OllamaModel
 from app.interfaces.processing_strategy import ProcessingStrategy
 from app.utils.model_utils import get_ollama_keep_alive
+from app.prompts import PromptComposer
 import logging_client
 
 # Initialize logger
@@ -31,79 +32,15 @@ class OutputArtifactStrategy(ProcessingStrategy):
         """
         self.ollama_host = ollama_host
         self.model = model
-        self.extraction_prompt = self._build_extraction_prompt()
+
+        # Initialize PromptComposer (modular prompt system)
+        self.prompt_composer = PromptComposer()
+        self.extraction_prompt = self.prompt_composer.get_extraction_prompt()
+
         self.keep_alive = get_ollama_keep_alive()  # Get from config for consistency
+
         logger.info(f"✅ OutputArtifactStrategy initialized with model: {self.model}")
-
-    def _build_extraction_prompt(self) -> str:
-        """Build artifact extraction prompt optimized for small-medium models (7B-24B)."""
-        return """Extract file artifacts from conversations. Output ONLY valid JSON.
-
-OUTPUT FORMAT (REQUIRED):
-{"filename": "example.py", "content": "def foo():\\n    return 42\\n", "artifact_type": "code"}
-
-If no file needed: {"filename": null}
-
-CRITICAL JSON RULES:
-- Escape \\n for newlines, \\" for quotes, \\\\ for backslashes
-- Single line, no text before/after JSON
-- ALWAYS include artifact_type field ("code", "data", or "text")
-
----
-
-EXTRACTION RULES:
-
-1. FILTER (remove from file):
-   - Conversational: "Here's", "Let me", "I've created"
-   - Explanations: "This works by", "The reason is"
-   - Usage examples (unless user asked for them)
-
-2. COMPLETE (add to file):
-   - Missing imports: Add at top if code uses json/requests/os/sys
-   - Basic error handling for production files
-   - Fix indentation and spacing
-
-3. REFORMAT (transform syntax):
-   - **Bold at line start** → ## Header (for .md)
-   - Remove ``` fences from code
-   - Strip markdown from .txt files
-
----
-
-EXAMPLES:
-
-USER: "create quicksort.py"
-ASSISTANT: "Here's quicksort:\\n\\n```python\\ndef quicksort(arr):\\n  return sorted(arr)\\n```"
-OUTPUT: {"filename": "quicksort.py", "content": "def quicksort(arr):\\n    return sorted(arr)\\n", "artifact_type": "code"}
-(Removed: "Here's quicksort", ``` fences)
-
-USER: "btc analysis to .md"
-ASSISTANT: "**Bitcoin Analysis**\\n- Price up 10%"
-OUTPUT: {"filename": "bitcoin-analysis.md", "content": "## Bitcoin Analysis\\n- Price up 10%", "artifact_type": "text"}
-(Transformed: **Bold** → ##Header)
-
-USER: "create fetch.py"
-ASSISTANT: "```python\\ndef fetch(url):\\n  return requests.get(url).json()\\n```"
-OUTPUT: {"filename": "fetch.py", "content": "import requests\\n\\ndef fetch(url):\\n    return requests.get(url).json()\\n", "artifact_type": "code"}
-(Added: missing import)
-
----
-
-FILENAME LOGIC:
-- User specified → use it
-- Python code → .py
-- Markdown → .md
-- JSON data → .json
-- Text → .txt
-
-ARTIFACT TYPE (REQUIRED):
-- "code": .py .js .ts .go .rs .sh
-- "data": .json .yaml .xml .csv
-- "text": .md .txt README
-
----
-
-EXECUTE: Read user request + assistant response. Extract file content. Output JSON."""
+        logger.info("✅ Extraction prompt loaded from JSON config")
 
     async def process(self, context: Dict) -> List[Dict]:
         """
@@ -181,12 +118,11 @@ ASSISTANT RESPONSE: {llm_response}"""
         prompt = f"{self.extraction_prompt}\n\n{conversation}"
 
         try:
-            # Create OllamaModel with thinking mode enabled
+            # Create OllamaModel for deterministic extraction (no thinking mode)
             ollama_model = OllamaModel(
                 host=self.ollama_host,
                 model_id=self.model,
                 temperature=0.1,  # Low temperature for consistent parsing
-                additional_args={'think': True},  # Enable thinking mode (Strands format)
                 keep_alive=self.keep_alive
             )
 

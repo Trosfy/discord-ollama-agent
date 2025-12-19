@@ -13,12 +13,17 @@ logger = logging_client.setup_logger('monitoring-service')
 
 
 class LogCleanup:
-    """Handles automatic cleanup of old log directories."""
+    """Handles automatic cleanup of old log directories and database records."""
 
-    def __init__(self):
-        """Initialize log cleanup."""
+    def __init__(self, database=None):
+        """Initialize log cleanup.
+
+        Args:
+            database: Optional HealthDatabase instance for database cleanup
+        """
         self.settings = LogSettings()
         self.base_dir = Path(self.settings.LOG_BASE_DIR)
+        self.database = database
 
     def get_old_log_directories(self) -> list[Path]:
         """
@@ -101,14 +106,52 @@ class LogCleanup:
             'errors': errors
         }
 
+    def cleanup_old_database_records(self) -> dict:
+        """
+        Delete old database records.
+
+        Returns:
+            Dict with cleanup statistics from database.cleanup_old_records()
+        """
+        if not self.database:
+            logger.warning("⚠️  Database not configured for cleanup")
+            return {'health_checks_deleted': 0, 'alerts_deleted': 0, 'cutoff_date': None}
+
+        try:
+            # Get stats before cleanup
+            stats_before = self.database.get_database_stats()
+
+            # Run cleanup
+            result = self.database.cleanup_old_records(retention_days=self.settings.LOG_RETENTION_DAYS)
+
+            # Get stats after cleanup
+            stats_after = self.database.get_database_stats()
+
+            # Calculate space freed
+            space_freed_mb = stats_before['database_size_mb'] - stats_after['database_size_mb']
+
+            logger.info(
+                f"🗑️  Database cleanup: "
+                f"{result['health_checks_deleted']:,} health checks, "
+                f"{result['alerts_deleted']:,} alerts deleted "
+                f"(cutoff: {result['cutoff_date'][:10]}), "
+                f"{space_freed_mb:.2f} MB freed"
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Database cleanup failed: {e}")
+            return {'health_checks_deleted': 0, 'alerts_deleted': 0, 'cutoff_date': None}
+
     async def cleanup_loop(self):
         """
-        Background task that periodically cleans up old logs.
+        Background task that periodically cleans up old logs and database records.
 
         Runs every LOG_CLEANUP_INTERVAL_HOURS (default: 6 hours).
         """
         logger.info(
-            f"🧹 Log cleanup started "
+            f"🧹 Cleanup service started "
             f"(retention: {self.settings.LOG_RETENTION_DAYS} days, "
             f"interval: {self.settings.LOG_CLEANUP_INTERVAL_HOURS} hours)"
         )
@@ -118,7 +161,7 @@ class LogCleanup:
 
         while True:
             try:
-                # Run cleanup
+                # Run log cleanup
                 result = self.cleanup_old_logs()
 
                 if result['deleted_count'] > 0:
@@ -131,7 +174,13 @@ class LogCleanup:
                     logger.debug("🧹 Log cleanup: No old directories to delete")
 
                 if result['errors']:
-                    logger.warning(f"⚠️  Cleanup had {len(result['errors'])} errors")
+                    logger.warning(f"⚠️  Log cleanup had {len(result['errors'])} errors")
+
+                # Run database cleanup
+                db_result = self.cleanup_old_database_records()
+
+                if db_result['health_checks_deleted'] == 0 and db_result['alerts_deleted'] == 0:
+                    logger.debug("🧹 Database cleanup: No old records to delete")
 
                 # Sleep until next cleanup
                 sleep_seconds = self.settings.LOG_CLEANUP_INTERVAL_HOURS * 3600

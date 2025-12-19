@@ -39,9 +39,13 @@ _AVAILABLE_MODELS: List[ModelCapabilities] = [
         name="rnj-1:8b",
         supports_tools=True,
         supports_thinking=False,
-        supports_vision=False,
-        thinking_format="boolean",
-        default_thinking_level="high"
+        supports_vision=False
+    ),
+    ModelCapabilities(
+        name="deepseek-ocr:3b",
+        supports_vision=True,
+        supports_tools=False,
+        supports_thinking=False
     ),
 ]
 
@@ -86,17 +90,18 @@ class Settings(BaseSettings):
 
     # Router Settings
     ROUTER_MODEL: str = "gpt-oss:20b"
-    CODER_MODEL: str = "deepcoder:14b"
+    SIMPLE_CODER_MODEL: str = "rnj-1:8b"  # Simple code writing (functions, algorithms, scripts)
+    COMPLEX_CODER_MODEL: str = "deepcoder:14b"  # Complex system design and architecture
     REASONING_MODEL: str = "magistral:24b"  # Use magistral:24b for reasoning with web tools (best for <40K tokens)
     RESEARCH_MODEL: str = "magistral:24b"  # Use magistral:24b with think=True for deep research with web tools
     MATH_MODEL: str = "rnj-1:8b"  # Math problem solving model
-    POST_PROCESSING_OUTPUT_ARTIFACT_MODEL: str = "gpt-oss:20b"  # Faster thinking model for intelligent artifact extraction (was: magistral:24b - too slow)
+    POST_PROCESSING_OUTPUT_ARTIFACT_MODEL: str = "ministral-3:14b"  # Mistral model optimized for structured output and instruction following
     DEFAULT_TEMPERATURE: float = 0.2  # Default temperature for LLM generation (lower = more deterministic)
 
     # Queue Settings
     MAX_QUEUE_SIZE: int = 50
     QUEUE_TIMEOUT_SECONDS: int = 300
-    VISIBILITY_TIMEOUT: int = 900  # 15 minutes (handles long-running requests like chart analysis)
+    VISIBILITY_TIMEOUT: int = 1200  # 20 minutes (handles long-running requests like chart analysis)
     MAX_RETRIES: int = 3
     RETRY_DELAY: int = 5  # seconds
 
@@ -145,7 +150,7 @@ class Settings(BaseSettings):
         '.sh', '.bash', '.zsh', '.fish',               # Shell
         '.sql', '.graphql', '.proto'                   # Database/API
     ]
-    OCR_MODEL: str = "qwen3-vl:8b"  # Ollama model for OCR/vision tasks
+    OCR_MODEL: str = "deepseek-ocr:3b"  # Ollama model for OCR/vision tasks
     ARTIFACT_TTL_HOURS: int = 12  # Artifact storage time (hours)
     UPLOAD_CLEANUP_HOURS: int = 1  # Temp upload file cleanup time (hours)
     TEMP_UPLOAD_DIR: str = "/tmp/discord-bot-uploads"
@@ -175,7 +180,8 @@ class Settings(BaseSettings):
         # Validate router models
         models_to_check = {
             'ROUTER_MODEL': self.ROUTER_MODEL,
-            'CODER_MODEL': self.CODER_MODEL,
+            'SIMPLE_CODER_MODEL': self.SIMPLE_CODER_MODEL,
+            'COMPLEX_CODER_MODEL': self.COMPLEX_CODER_MODEL,
             'REASONING_MODEL': self.REASONING_MODEL,
             'RESEARCH_MODEL': self.RESEARCH_MODEL,
             'MATH_MODEL': self.MATH_MODEL,

@@ -5,6 +5,7 @@ sys.path.insert(0, '/shared')
 import asyncio
 from strands import Agent
 from strands.models.ollama import OllamaModel
+from app.prompts import PromptComposer
 import logging_client
 
 # Initialize logger
@@ -24,25 +25,13 @@ class OutputArtifactDetector:
         """
         self.ollama_host = ollama_host
         self.model = model
-        self.detection_prompt = self._build_detection_prompt()
+
+        # Initialize PromptComposer (modular prompt system)
+        self.prompt_composer = PromptComposer()
+        self.detection_prompt = self.prompt_composer.get_detection_prompt()
+
         logger.info(f"✅ OutputArtifactDetector initialized with model: {self.model}")
-
-    def _build_detection_prompt(self) -> str:
-        """Build the output artifact detection prompt."""
-        return """You are an intent classifier for file creation requests.
-
-Analyze the user's message and determine if they want you to CREATE A FILE as output.
-
-Examples of file creation intent:
-- "create a Python file for quicksort" → YES
-- "generate a config.json for my app" → YES
-- "make a markdown document about REST APIs" → YES
-- "save this as a script" → YES
-- "write a function to reverse a string" → NO (just wants code, not a file)
-- "explain how to create a file in Python" → NO (asking for explanation, not requesting file creation)
-- "what's the difference between lists and tuples?" → NO (question, no file requested)
-
-Output ONLY "YES" if user wants a file created, or "NO" if they don't. Nothing else."""
+        logger.info("✅ Detection prompt loaded from JSON config")
 
     async def detect(self, user_message: str) -> bool:
         """
