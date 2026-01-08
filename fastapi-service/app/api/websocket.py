@@ -191,7 +191,7 @@ async def handle_message_request(
     # Add to queue
     request = {
         'user_id': data['user_id'],
-        'thread_id': data['thread_id'],
+        'conversation_id': data['conversation_id'],
         'message': data['message'],
         'message_id': data['message_id'],
         'channel_id': data['channel_id'],
@@ -230,43 +230,43 @@ async def handle_message_request(
 
 async def handle_reset_request(data: Dict, storage, websocket: WebSocket):
     """Handle thread context reset request."""
-    thread_id = data.get('thread_id')
+    conversation_id = data.get('conversation_id')
     user_id = data.get('user_id')
 
-    if not thread_id:
+    if not conversation_id:
         await websocket.send_json({
             'type': 'error',
-            'error': 'No thread_id provided'
+            'error': 'No conversation_id provided'
         })
         return
 
     try:
         # Get all messages in thread
-        messages = await storage.get_thread_messages(thread_id)
+        messages = await storage.get_conversation_messages(conversation_id)
 
         if not messages:
-            logger.info(f"Thread {thread_id} has no messages to delete")
+            logger.info(f"Thread {conversation_id} has no messages to delete")
             await websocket.send_json({
                 'type': 'reset_complete',
-                'thread_id': thread_id,
+                'conversation_id': conversation_id,
                 'deleted_count': 0
             })
             return
 
         # Delete all messages
         timestamps = [msg['message_timestamp'] for msg in messages]
-        await storage.delete_messages(thread_id, timestamps)
+        await storage.delete_messages(conversation_id, timestamps)
 
-        logger.info(f"🔄 Reset thread {thread_id}: deleted {len(timestamps)} messages (user: {user_id})")
+        logger.info(f"🔄 Reset thread {conversation_id}: deleted {len(timestamps)} messages (user: {user_id})")
 
         await websocket.send_json({
             'type': 'reset_complete',
-            'thread_id': thread_id,
+            'conversation_id': conversation_id,
             'deleted_count': len(timestamps)
         })
 
     except Exception as e:
-        logger.error(f"Failed to reset thread {thread_id}: {e}")
+        logger.error(f"Failed to reset thread {conversation_id}: {e}")
         await websocket.send_json({
             'type': 'error',
             'error': f'Failed to reset thread: {str(e)}'
@@ -275,43 +275,43 @@ async def handle_reset_request(data: Dict, storage, websocket: WebSocket):
 
 async def handle_close_request(data: Dict, storage, websocket: WebSocket):
     """Handle thread close and delete request."""
-    thread_id = data.get('thread_id')
+    conversation_id = data.get('conversation_id')
     user_id = data.get('user_id')
 
-    if not thread_id:
+    if not conversation_id:
         await websocket.send_json({
             'type': 'error',
-            'error': 'No thread_id provided'
+            'error': 'No conversation_id provided'
         })
         return
 
     try:
         # Get all messages in thread
-        messages = await storage.get_thread_messages(thread_id)
+        messages = await storage.get_conversation_messages(conversation_id)
 
         if not messages:
-            logger.info(f"Thread {thread_id} has no messages to delete")
+            logger.info(f"Thread {conversation_id} has no messages to delete")
             await websocket.send_json({
                 'type': 'close_complete',
-                'thread_id': thread_id,
+                'conversation_id': conversation_id,
                 'deleted_count': 0
             })
             return
 
         # Delete all messages
         timestamps = [msg['message_timestamp'] for msg in messages]
-        await storage.delete_messages(thread_id, timestamps)
+        await storage.delete_messages(conversation_id, timestamps)
 
-        logger.info(f"🗑️ Closed thread {thread_id}: deleted {len(timestamps)} messages (user: {user_id})")
+        logger.info(f"🗑️ Closed thread {conversation_id}: deleted {len(timestamps)} messages (user: {user_id})")
 
         await websocket.send_json({
             'type': 'close_complete',
-            'thread_id': thread_id,
+            'conversation_id': conversation_id,
             'deleted_count': len(timestamps)
         })
 
     except Exception as e:
-        logger.error(f"Failed to close thread {thread_id}: {e}")
+        logger.error(f"Failed to close thread {conversation_id}: {e}")
         await websocket.send_json({
             'type': 'error',
             'error': f'Failed to close thread: {str(e)}'
@@ -322,27 +322,27 @@ async def handle_summarize_request(data: Dict, storage, websocket: WebSocket):
     """Handle thread summarization request."""
     from app.dependencies import get_summarization_service
 
-    thread_id = data.get('thread_id')
+    conversation_id = data.get('conversation_id')
     user_id = data.get('user_id')
     interaction_id = data.get('interaction_id')
 
-    if not thread_id:
+    if not conversation_id:
         await websocket.send_json({
             'type': 'error',
-            'error': 'No thread_id provided',
+            'error': 'No conversation_id provided',
             'interaction_id': interaction_id
         })
         return
 
     try:
         # Get all messages in thread
-        messages = await storage.get_thread_messages(thread_id)
+        messages = await storage.get_conversation_messages(conversation_id)
 
         if not messages:
-            logger.info(f"Thread {thread_id} has no messages to summarize")
+            logger.info(f"Thread {conversation_id} has no messages to summarize")
             await websocket.send_json({
                 'type': 'summarize_response',
-                'thread_id': thread_id,
+                'conversation_id': conversation_id,
                 'summary': None,
                 'interaction_id': interaction_id
             })
@@ -352,12 +352,12 @@ async def handle_summarize_request(data: Dict, storage, websocket: WebSocket):
         summarization_service = get_summarization_service()
 
         # Generate summary
-        logger.info(f"📝 Generating summary for thread {thread_id} ({len(messages)} messages)")
+        logger.info(f"📝 Generating summary for thread {conversation_id} ({len(messages)} messages)")
         summary = await summarization_service.generate_summary(messages)
 
         # Delete all old messages
         timestamps = [msg['message_timestamp'] for msg in messages]
-        await storage.delete_messages(thread_id, timestamps)
+        await storage.delete_messages(conversation_id, timestamps)
 
         # Add summary as new message
         import time
@@ -365,7 +365,7 @@ async def handle_summarize_request(data: Dict, storage, websocket: WebSocket):
 
         summary_timestamp = datetime.utcnow().isoformat()
         await storage.add_message(
-            thread_id=thread_id,
+            conversation_id=conversation_id,
             message_id=f"summary_{int(time.time())}",
             role='system',
             content=f"[Previous conversation summary]\n{summary}",
@@ -375,22 +375,22 @@ async def handle_summarize_request(data: Dict, storage, websocket: WebSocket):
             is_summary=True
         )
 
-        logger.info(f"📝 Summarized thread {thread_id}: {len(timestamps)} messages → summary (user: {user_id})")
+        logger.info(f"📝 Summarized thread {conversation_id}: {len(timestamps)} messages → summary (user: {user_id})")
 
         # Send summary back to user
         await websocket.send_json({
             'type': 'summarize_response',
-            'thread_id': thread_id,
+            'conversation_id': conversation_id,
             'summary': summary,
             'interaction_id': interaction_id,
             'messages_summarized': len(timestamps)
         })
 
     except Exception as e:
-        logger.error(f"Failed to summarize thread {thread_id}: {e}")
+        logger.error(f"Failed to summarize thread {conversation_id}: {e}")
         await websocket.send_json({
             'type': 'summarize_response',
-            'thread_id': thread_id,
+            'conversation_id': conversation_id,
             'error': str(e),
             'interaction_id': interaction_id
         })

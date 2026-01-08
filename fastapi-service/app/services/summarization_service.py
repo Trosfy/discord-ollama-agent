@@ -43,7 +43,7 @@ You are a conversation summarizer. Create a concise summary of the conversation 
 
     async def summarize_and_prune(
         self,
-        thread_id: str,
+        conversation_id: str,
         messages: List[Dict],
         user_id: str
     ) -> List[Dict]:
@@ -52,7 +52,7 @@ You are a conversation summarizer. Create a concise summary of the conversation 
         Returns updated context with summary.
 
         Args:
-            thread_id: Thread identifier
+            conversation_id: Thread identifier
             messages: List of message dictionaries
             user_id: User ID for the summary attribution
 
@@ -85,12 +85,12 @@ You are a conversation summarizer. Create a concise summary of the conversation 
 
         # Delete old messages from database
         timestamps = [msg['message_timestamp'] for msg in messages_to_summarize]
-        await self.storage.delete_messages(thread_id, timestamps)
+        await self.storage.delete_messages(conversation_id, timestamps)
 
         # Add summary to database
         await self.storage.add_message(
-            thread_id=thread_id,
-            message_id=f"summary_{thread_id}_{len(messages_to_summarize)}",
+            conversation_id=conversation_id,
+            message_id=f"summary_{conversation_id}_{len(messages_to_summarize)}",
             role='system',
             content=f"[SUMMARY OF PREVIOUS CONVERSATION]\n{summary_content}",
             token_count=len(summary_content.split()),

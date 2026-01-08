@@ -16,26 +16,30 @@ class Route:
     request types. Routing logic is handled by the Router class using LLM.
     """
 
-    def __init__(self, name: str, model: str, mode: str = 'single'):
-        """Initialize route with name and model configuration.
+    def __init__(self, name: str, model_attr: str, mode: str = 'single'):
+        """Initialize route with name and settings attribute name.
 
         Args:
             name: Route name (e.g., "MATH", "SIMPLE_CODE")
-            model: Model ID to use for this route
+            model_attr: Settings attribute name (e.g., "MATH_MODEL")
             mode: Execution mode (default: 'single')
         """
         self.name = name
-        self.model = model
+        self.model_attr = model_attr  # Store attribute name, not value
         self.mode = mode
 
     def get_model_config(self) -> Dict[str, Any]:
         """Get model configuration for this route.
 
+        Reads model dynamically from active profile to support runtime profile switching.
+
         Returns:
             Dict with 'model' and 'mode' keys
         """
+        # Read model from settings dynamically (supports profile switching)
+        model = getattr(settings, self.model_attr)
         return {
-            'model': self.model,
+            'model': model,
             'mode': self.mode
         }
 
@@ -50,11 +54,11 @@ class MathRoute(Route):
     - Limits, summations
     - Mathematical notation (∫, ∑, ∂, √, etc.)
 
-    Model: rnj-1:8b (specialized math model)
+    Model: Reads from active profile's MATH_MODEL
     """
 
     def __init__(self):
-        super().__init__(name='MATH', model=settings.MATH_MODEL)
+        super().__init__(name='MATH', model_attr='MATH_MODEL')
 
 
 class SimpleCodeRoute(Route):
@@ -67,11 +71,11 @@ class SimpleCodeRoute(Route):
     - Code explanations
     - Single-file scripts
 
-    Model: rnj-1:8b (fast code generation)
+    Model: Reads from active profile's SIMPLE_CODER_MODEL
     """
 
     def __init__(self):
-        super().__init__(name='SIMPLE_CODE', model=settings.SIMPLE_CODER_MODEL)
+        super().__init__(name='SIMPLE_CODE', model_attr='SIMPLE_CODER_MODEL')
 
 
 class ComplexCodeRoute(Route):
@@ -85,11 +89,11 @@ class ComplexCodeRoute(Route):
     - Scalability & performance optimization
     - Full-stack implementations
 
-    Model: deepcoder:14b (O3-mini level reasoning)
+    Model: Reads from active profile's COMPLEX_CODER_MODEL
     """
 
     def __init__(self):
-        super().__init__(name='COMPLEX_CODE', model=settings.COMPLEX_CODER_MODEL)
+        super().__init__(name='COMPLEX_CODE', model_attr='COMPLEX_CODER_MODEL')
 
 
 class ReasoningRoute(Route):
@@ -102,12 +106,12 @@ class ReasoningRoute(Route):
     - Decision-making support
     - Analytical questions
 
-    Model: magistral:24b (general reasoning model)
+    Model: Reads from active profile's REASONING_MODEL
     Web search: Limited to 2-3 sources
     """
 
     def __init__(self):
-        super().__init__(name='REASONING', model=settings.REASONING_MODEL)
+        super().__init__(name='REASONING', model_attr='REASONING_MODEL')
 
 
 class ResearchRoute(Route):
@@ -119,13 +123,13 @@ class ResearchRoute(Route):
     - Latest developments queries
     - Multi-source information gathering
 
-    Model: magistral:24b (general reasoning model with thinking)
+    Model: Reads from active profile's RESEARCH_MODEL
     Web search: Extensive, up to 5 sources
     Thinking mode: Enabled (for complex analysis)
     """
 
     def __init__(self):
-        super().__init__(name='RESEARCH', model=settings.RESEARCH_MODEL)
+        super().__init__(name='RESEARCH', model_attr='RESEARCH_MODEL')
 
 
 class SelfHandleRoute(Route):
@@ -138,8 +142,8 @@ class SelfHandleRoute(Route):
     - Simple information queries
     - Everything else (fallback)
 
-    Model: gpt-oss:20b (general conversation model)
+    Model: Reads from active profile's ROUTER_MODEL
     """
 
     def __init__(self):
-        super().__init__(name='SELF_HANDLE', model=settings.ROUTER_MODEL)
+        super().__init__(name='SELF_HANDLE', model_attr='ROUTER_MODEL')

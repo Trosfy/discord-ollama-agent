@@ -1,6 +1,7 @@
 """Storage interfaces following SOLID principles (Interface Segregation, Dependency Inversion)."""
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Protocol
+from pydantic import BaseModel
 
 
 # SOLID: Interface Segregation Principle
@@ -8,44 +9,45 @@ from typing import List, Dict, Optional, Protocol
 
 
 class IConversationStorage(Protocol):
-    """Conversation and thread management (Single Responsibility)."""
+    """Conversation management (Single Responsibility)."""
 
-    async def get_thread_messages(
+    async def get_conversation_messages(
         self,
-        thread_id: str,
+        conversation_id: str,
         limit: Optional[int] = None
     ) -> List[Dict]:
-        """Get messages for a thread, ordered by timestamp."""
+        """Get messages for a conversation, ordered by timestamp."""
         ...
 
     async def add_message(
         self,
-        thread_id: str,
+        conversation_id: str,
         message_id: str,
         role: str,
         content: str,
         token_count: int,
         user_id: str,
         model_used: str,
-        is_summary: bool = False
+        is_summary: bool = False,
+        generation_time: Optional[float] = None
     ) -> None:
-        """Add a message to a thread."""
+        """Add a message to a conversation."""
         ...
 
     async def delete_messages(
         self,
-        thread_id: str,
+        conversation_id: str,
         message_timestamps: List[str]
     ) -> None:
-        """Delete multiple messages from a thread."""
+        """Delete multiple messages from a conversation."""
         ...
 
-    async def get_user_threads(
+    async def get_user_conversations(
         self,
         user_id: str,
         limit: int = 10
     ) -> List[str]:
-        """Get list of thread IDs for a user."""
+        """Get list of conversation IDs for a user."""
         ...
 
 
@@ -150,6 +152,75 @@ class ITokenTrackingStorage(Protocol):
 
     async def reset_weekly_tokens(self) -> None:
         """Reset weekly token counters for all users."""
+        ...
+
+
+class VectorChunk(BaseModel):
+    """Represents a stored chunk with embedding vector."""
+    chunk_id: str  # Unique chunk identifier (UUID)
+    chunk_text: str  # The actual text content
+    embedding_vector: List[float]  # Embedding vector
+    chunk_index: int  # Position in original document (0-based)
+    token_count: int  # Number of tokens in chunk
+    source_url: str  # Original source URL
+    created_at: str  # ISO timestamp
+    url_hash: str  # SHA256 hash of URL (partition key)
+
+
+class IVectorStorage(Protocol):
+    """Vector storage for webpage chunks with embeddings (Single Responsibility)."""
+
+    async def store_chunks(
+        self,
+        url: str,
+        chunks: List[Dict],
+        ttl_hours: int
+    ) -> int:
+        """Store webpage chunks with embeddings and TTL.
+
+        Args:
+            url: Source URL (will be hashed for partition key)
+            chunks: List of dicts with keys: chunk_id, chunk_text, embedding_vector,
+                   chunk_index, token_count
+            ttl_hours: Time-to-live in hours
+
+        Returns:
+            Number of chunks stored
+
+        Raises:
+            ValueError: If url or chunks are invalid
+        """
+        ...
+
+    async def get_chunks_by_url(self, url: str) -> Optional[List[VectorChunk]]:
+        """Retrieve all chunks for a URL (cache check).
+
+        Args:
+            url: Source URL to look up
+
+        Returns:
+            List of VectorChunk objects if found and not expired, None otherwise
+        """
+        ...
+
+    async def search_similar(
+        self,
+        query_embedding: List[float],
+        top_k: int = 5
+    ) -> List[VectorChunk]:
+        """Search for most similar chunks using cosine similarity.
+
+        Args:
+            query_embedding: Query vector to compare against
+            top_k: Number of top results to return
+
+        Returns:
+            List of VectorChunk objects sorted by similarity (highest first)
+
+        Note:
+            Uses client-side cosine similarity computation.
+            For production scale, consider Pinecone/Weaviate/pgvector.
+        """
         ...
 
 

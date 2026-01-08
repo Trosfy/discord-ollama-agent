@@ -1,0 +1,26 @@
+[project]
+name = "trollama-admin-service"
+version = "1.0.0"
+requires-python = ">=3.11"
+
+dependencies = [
+    "fastapi>=0.104.1",
+    "uvicorn[standard]>=0.24.0",
+    "httpx>=0.25.2",
+    "python-jose[cryptography]>=3.3.0",
+    "PyJWT>=2.8.0",
+    "aioboto3>=13.0.1",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.0.0",
+    "sse-starlette>=2.0.0",
+    "dependency-injector>=4.48.3",
+    "PyYAML>=6.0.1",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.4.3",
+    "pytest-asyncio>=0.21.1",
+    "httpx>=0.25.2",
+    "moto[dynamodb]>=4.2.0",
+]

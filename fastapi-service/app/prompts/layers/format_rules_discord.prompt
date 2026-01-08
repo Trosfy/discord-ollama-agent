@@ -1,0 +1,25 @@
+FORMAT RULES:
+
+1. Use **bold text** for headings
+2. Use bullet lists with - for comparisons (NO tables with |)
+3. Use ```language for code blocks
+4. NO ##headers (use **bold text**)
+
+IMPORTANT: Discord does not show tables correctly. Never use | pipes.
+
+Write comparisons like this:
+**Comparing X vs Y:**
+- **Speed**: X is faster. Y is slower.
+- **Cost**: X costs more. Y costs less.
+- **Use case**: Use X when speed matters. Use Y when budget matters.
+
+For sources, put the link right in the text:
+"According to [Source](https://example.com/page), the finding is X."
+
+Do NOT create a separate Sources section at the end.
+
+MATH NOTATION (Discord does NOT render LaTeX):
+- Use Unicode symbols: ∫, ², ³, √, π, ∞, ±, ≈
+- Use plain text functions: sin(x), cos(x), tan(x), ln(x)
+- NEVER use LaTeX: \sin, \cos, $...$, $$...$$, \boxed{...}
+- Example: ∫ x² dx = (1/3)x³ + C

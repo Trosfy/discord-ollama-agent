@@ -9,8 +9,9 @@ from typing import Optional
 from app.interfaces.queue import QueueInterface
 from app.interfaces.websocket import WebSocketInterface
 from app.services.orchestrator import Orchestrator
+from app.services.response_formatters import get_formatter
 from app.implementations.websocket_manager import get_random_status_message
-from app.config import settings
+from app.config import settings, get_active_profile
 import logging_client
 
 # Initialize logger
@@ -79,22 +80,28 @@ class QueueWorker:
         """
         Process a single request with streaming support.
 
+        Handles both Discord (bot_id) and Web UI (webui_client_id) connections.
+        Uses ws_manager for unified WebSocket management.
+
         Args:
             request: Request dictionary from queue
         """
         request_id = request['request_id']
         bot_id = request.get('bot_id')
+        webui_client_id = request.get('webui_client_id')  # Web UI client ID
 
         # Check if streaming is enabled
         use_streaming = settings.ENABLE_STREAMING
 
         try:
-            # Send processing notification
+            # Send processing notification using Strategy Pattern
+            formatter = get_formatter(request)
+            processing_msg = await formatter.format_processing(request_id)
+
             if bot_id:
-                await self.ws_manager.send_to_client(bot_id, {
-                    'type': 'processing',
-                    'request_id': request_id
-                })
+                await self.ws_manager.send_to_client(bot_id, processing_msg)
+            elif webui_client_id:
+                await self.ws_manager.send_to_client(webui_client_id, processing_msg)
 
             # Process with streaming if enabled
             if use_streaming:
@@ -107,21 +114,18 @@ class QueueWorker:
             # Mark as complete
             await self.queue.mark_complete(request_id, result)
 
-            # Send final result (unified for both streaming and non-streaming)
-            # Both modes now use 'stream_chunk' - streaming already sent chunks, non-streaming sends 1 chunk
+            # Send final result for non-streaming mode (streaming already sent in _process_with_streaming)
             if bot_id and not use_streaming:
-                # For non-streaming, send as single complete chunk (same as streaming final chunk)
-                await self.ws_manager.send_to_client(bot_id, {
-                    'type': 'stream_chunk',  # ✅ Unified message type
-                    'request_id': request_id,
-                    'content': result['response'],  # ✅ Use 'content' key (same as streaming)
-                    'is_complete': True,  # ✅ Single chunk = complete
-                    'artifacts': result.get('artifacts', []),  # ✅ Include artifacts in final chunk
-                    'channel_id': request['channel_id'],
-                    'message_id': request['message_id'],
-                    'message_channel_id': request.get('message_channel_id')
-                })
-            # Note: Streaming mode already sends final chunk with artifacts in _process_with_streaming (line 269)
+                # Format completion response using Strategy Pattern
+                completion_msg = await formatter.format_completion(
+                    request_id,
+                    result,
+                    request['channel_id'],
+                    request['message_id'],
+                    request.get('message_channel_id')
+                )
+                await self.ws_manager.send_to_client(bot_id, completion_msg)
+            # Note: Streaming mode already sends final chunk with artifacts in _process_with_streaming
 
         except Exception as e:
             logger.error(f"❌ Request {request_id} failed: {e}")
@@ -129,23 +133,30 @@ class QueueWorker:
             # Mark as failed (handles retries)
             requeued = await self.queue.mark_failed(request_id, str(e))
 
-            # Notify if failed after max retries
+            # Notify if failed after max retries using Strategy Pattern
             if not requeued and request['attempt'] >= 2:
+                formatter = get_formatter(request)
+                failed_msg = await formatter.format_failed(
+                    request_id,
+                    str(e),
+                    request['attempt'] + 1,
+                    request.get('channel_id'),
+                    request.get('message_id'),
+                    request.get('message_channel_id'),
+                    request.get('user_id')
+                )
+
                 if bot_id:
-                    await self.ws_manager.send_to_client(bot_id, {
-                        'type': 'failed',
-                        'request_id': request_id,
-                        'error': str(e),
-                        'attempts': request['attempt'] + 1,
-                        'channel_id': request['channel_id'],
-                        'message_id': request['message_id'],
-                        'message_channel_id': request.get('message_channel_id'),
-                        'user_id': request['user_id']
-                    })
+                    await self.ws_manager.send_to_client(bot_id, failed_msg)
+                elif webui_client_id:
+                    await self.ws_manager.send_to_client(webui_client_id, failed_msg)
 
     async def _process_with_streaming(self, request: dict) -> dict:
         """
         Process request with streaming callback.
+
+        Handles both Discord (bot_id) and Web UI (webui_client_id) connections.
+        Uses ws_manager for unified WebSocket management.
 
         Args:
             request: Request dictionary
@@ -155,28 +166,44 @@ class QueueWorker:
         """
         request_id = request['request_id']
         bot_id = request.get('bot_id')
+        webui_client_id = request.get('webui_client_id')  # Web UI client ID
+
+        # Get formatter for this client type
+        formatter = get_formatter(request)
 
         # Send "Thinking..." status immediately (before routing/processing)
         # Use stream_chunk to reuse existing "Processing files..." message if present
         if bot_id:
-            await self.ws_manager.send_to_client(bot_id, {
-                'type': 'stream_chunk',  # ✅ Changed from early_status to stream_chunk
-                'request_id': request_id,
-                'content': get_random_status_message('thinking'),
-                'is_complete': False,
-                'channel_id': request['channel_id'],
-                'message_id': request['message_id'],
-                'message_channel_id': request.get('message_channel_id')
-            })
+            thinking_msg = await formatter.format_stream_update(
+                request_id,
+                get_random_status_message('thinking'),
+                request['channel_id'],
+                request['message_id'],
+                request.get('message_channel_id')
+            )
+            await self.ws_manager.send_to_client(bot_id, thinking_msg)
             logger.debug(f"📤 Sent thinking status as stream_chunk for request {request_id}")
+        elif webui_client_id:
+            # Web UI: no need for "thinking" message, start streaming immediately
+            pass
 
         # Streaming state
         last_update_time = 0
-        UPDATE_INTERVAL = settings.STREAM_CHUNK_INTERVAL  # Default 0.5 seconds
+        last_sent_length = 0  # Track what we've sent to Web UI (for delta calculation)
+        UPDATE_INTERVAL = settings.STREAM_CHUNK_INTERVAL if bot_id else 0.05  # Web UI: faster updates
 
         async def stream_callback(content: str):
-            """Called for each LLM chunk - throttled to avoid Discord rate limits."""
-            nonlocal last_update_time
+            """
+            Called for each LLM chunk - throttled to avoid rate limits.
+
+            Args:
+                content: Full accumulated message content from orchestrator
+
+            Behavior:
+                - Discord: Sends full content (bot will edit message with full text)
+                - Web UI: Sends only delta (frontend appends new tokens)
+            """
+            nonlocal last_update_time, last_sent_length
 
             # Throttle updates
             current_time = time.time()
@@ -185,18 +212,36 @@ class QueueWorker:
 
             last_update_time = current_time
 
-            # Send chunk to Discord bot
-            if bot_id:
+            # Determine what to send based on client type
+            client_id = bot_id or webui_client_id
+            if client_id:
                 try:
-                    await self.ws_manager.send_to_client(bot_id, {
-                        'type': 'stream_chunk',
-                        'request_id': request_id,
-                        'content': content,
-                        'is_complete': False,
-                        'channel_id': request['channel_id'],
-                        'message_id': request['message_id'],
-                        'message_channel_id': request.get('message_channel_id')
-                    })
+                    # Discord: Send full content (bot will edit message with full text)
+                    if bot_id:
+                        chunk_msg = await formatter.format_stream_update(
+                            request_id,
+                            content,  # Full accumulated content
+                            request.get('channel_id'),
+                            request.get('message_id'),
+                            request.get('message_channel_id')
+                        )
+                        await self.ws_manager.send_to_client(client_id, chunk_msg)
+
+                    # Web UI: Send only delta (frontend will append to existing message)
+                    elif webui_client_id:
+                        if len(content) > last_sent_length:
+                            # Calculate delta (new content since last send)
+                            delta = content[last_sent_length:]
+                            chunk_msg = await formatter.format_stream_update(
+                                request_id,
+                                delta,  # Only the new delta
+                                request.get('channel_id'),
+                                request.get('message_id'),
+                                request.get('message_channel_id')
+                            )
+                            await self.ws_manager.send_to_client(client_id, chunk_msg)
+                            last_sent_length = len(content)  # Update tracking
+
                 except Exception as e:
                     logger.warning(f"⚠️  Failed to send stream chunk: {e}")
 
@@ -225,17 +270,16 @@ class QueueWorker:
                     final_content = None
 
                     for retry_attempt in range(1, MAX_RETRIES + 1):
-                        # Send retry status with attempt number
+                        # Send retry status with attempt number using Strategy Pattern
                         retry_status = f'*Retrying with non-streaming mode (attempt {retry_attempt}/{MAX_RETRIES})...*\n\n'
-                        await self.ws_manager.send_to_client(bot_id, {
-                            'type': 'stream_chunk',  # ✅ Updates existing "Thinking..." message
-                            'request_id': request_id,
-                            'content': retry_status,
-                            'is_complete': False,
-                            'channel_id': request['channel_id'],
-                            'message_id': request['message_id'],
-                            'message_channel_id': request.get('message_channel_id')
-                        })
+                        retry_msg = await formatter.format_stream_update(
+                            request_id,
+                            retry_status,
+                            request['channel_id'],
+                            request['message_id'],
+                            request.get('message_channel_id')
+                        )
+                        await self.ws_manager.send_to_client(bot_id, retry_msg)
 
                         # Retry with non-streaming (bypasses SDK streaming bug)
                         try:
@@ -262,58 +306,149 @@ class QueueWorker:
                         if retry_attempt == MAX_RETRIES and (not final_content or not final_content.strip()):
                             logger.error(f"❌ All {MAX_RETRIES} retry attempts failed for request {request_id}")
 
-                            # Send error message as last resort
+                            # Send error message as last resort using Strategy Pattern
                             error_content = f"❌ _Unable to generate response (tried {MAX_RETRIES} times)_"
-                            await self.ws_manager.send_to_client(bot_id, {
-                                'type': 'stream_chunk',
-                                'request_id': request_id,
-                                'content': error_content,
-                                'is_complete': True,
-                                'channel_id': request['channel_id'],
-                                'message_id': request['message_id'],
-                                'message_channel_id': request.get('message_channel_id'),
-                                'error': True
-                            })
+                            error_msg = await formatter.format_error(
+                                request_id,
+                                error_content,
+                                request.get('channel_id'),
+                                request.get('message_id'),
+                                request.get('message_channel_id')
+                            )
+                            # Override type to indicate completion with error
+                            error_msg['is_complete'] = True
+                            error_msg['error'] = True
+                            await self.ws_manager.send_to_client(bot_id, error_msg)
                             return result  # Return original failed result
 
-                # Normal flow OR successful retry - send final chunk
-                await self.ws_manager.send_to_client(bot_id, {
-                    'type': 'stream_chunk',
-                    'request_id': request_id,
-                    'content': final_content,
-                    'is_complete': True,
-                    'channel_id': request['channel_id'],
-                    'message_id': request['message_id'],
-                    'message_channel_id': request.get('message_channel_id'),
-                    'artifacts': result.get('artifacts', [])
-                })
+                # Normal flow OR successful retry - send final chunk using Strategy Pattern
+                completion_msg = await formatter.format_completion(
+                    request_id,
+                    result,
+                    request['channel_id'],
+                    request['message_id'],
+                    request.get('message_channel_id')
+                )
+                await self.ws_manager.send_to_client(bot_id, completion_msg)
 
-                # Unload model after streaming is complete and transmitted
-                # This prevents race condition where model is unloaded while chunks are still queued
-                route_config = result.get('route_config', {})
-                if route_config.get('route') == 'SELF_HANDLE':
-                    model_to_unload = route_config.get('model')
-                    if model_to_unload == settings.ROUTER_MODEL:
+            elif webui_client_id:
+                # Web UI: Send final "done" message using Strategy Pattern
+                completion_msg = await formatter.format_completion(
+                    request_id,
+                    result,
+                    request.get('channel_id'),
+                    request.get('message_id'),
+                    request.get('message_channel_id')
+                )
+                await self.ws_manager.send_to_client(webui_client_id, completion_msg)
+
+            # Unload model after streaming complete (conservative mode only)
+            route_config = result.get('route_config', {})
+            if route_config.get('route') == 'SELF_HANDLE':
+                model_to_unload = route_config.get('model')
+                if model_to_unload == settings.ROUTER_MODEL:
+                    if settings.VRAM_CONSERVATIVE_MODE:
+                        # Conservative mode (16GB): Force-unload after each request
                         from app.utils.model_utils import force_unload_model
                         await force_unload_model(settings.ROUTER_MODEL)
-                        logger.debug("🔽 Unloaded router after streaming transmission complete")
+                        logger.debug("🔽 Conservative mode: Unloaded router after streaming")
+                    else:
+                        # High-VRAM profiles (performance/balanced): Trust keep_alive + orchestrator
+                        profile_name = get_active_profile().profile_name.title()
+                        logger.debug(f"💤 {profile_name} profile: Router stays loaded (keep_alive=30m)")
 
             return result
 
         except Exception as e:
-            # Streaming failed - send error as final chunk
+            # Streaming failed - check if circuit breaker can recover
             logger.error(f"❌ Streaming failed for request {request_id}: {e}")
 
-            if bot_id:
-                await self.ws_manager.send_to_client(bot_id, {
-                    'type': 'stream_chunk',
-                    'request_id': request_id,
-                    'content': f"❌ Generation interrupted: {str(e)}",
-                    'is_complete': True,
-                    'channel_id': request['channel_id'],
-                    'message_id': request['message_id'],
-                    'message_channel_id': request.get('message_channel_id'),
-                    'error': True
-                })
+            # Check if this is a circuit breaker-triggerable error (SGLang connection failure)
+            error_msg_str = str(e).lower()
+            is_sglang_error = (
+                "connection" in error_msg_str or
+                "connect" in error_msg_str or
+                "refused" in error_msg_str
+            )
+
+            # If this might trigger circuit breaker, give it time to switch profile and retry
+            if is_sglang_error and self.orchestrator.profile_manager:
+                logger.info(f"🔄 SGLang connection error detected, waiting for circuit breaker...")
+
+                # Wait for circuit breaker to trigger and profile switch to complete
+                # The circuit breaker runs asynchronously via asyncio.create_task() and needs time to:
+                # 1. Record crash (sync)
+                # 2. Notify observers via create_task (async)
+                # 3. ProfileManager acquires lock (async)
+                # 4. Switch profile (sync)
+                # Total time needed: ~1-2 seconds under load
+                await asyncio.sleep(1.5)  # Increased to ensure circuit breaker completes
+
+                # Check if we're now in fallback mode (circuit breaker triggered)
+                if self.orchestrator.profile_manager.is_in_fallback():
+                    logger.info(f"✅ Circuit breaker triggered during request - retrying with conservative profile...")
+
+                    # Send retry status to user
+                    client_id = bot_id or webui_client_id
+                    if client_id:
+                        retry_status = '*Falling back to alternative model...*\n\n'
+                        retry_msg = await formatter.format_stream_update(
+                            request_id,
+                            retry_status,
+                            request['channel_id'],
+                            request['message_id'],
+                            request.get('message_channel_id')
+                        )
+                        await self.ws_manager.send_to_client(client_id, retry_msg)
+
+                    # Retry with conservative profile
+                    try:
+                        result = await self.orchestrator.process_request_stream(
+                            request,
+                            stream_callback
+                        )
+
+                        # SUCCESS! Send final chunk (format_completion expects full result dict)
+                        if bot_id:
+                            completion_msg = await formatter.format_completion(
+                                request_id,
+                                result,  # Pass full dict (formatter extracts result['response'])
+                                request['channel_id'],
+                                request.get('message_id'),
+                                request.get('message_channel_id')
+                            )
+                            await self.ws_manager.send_to_client(bot_id, completion_msg)
+                        elif webui_client_id:
+                            completion_msg = await formatter.format_completion(
+                                request_id,
+                                result,  # Pass full dict (formatter extracts metadata)
+                                request.get('conversation_id'),
+                                request.get('message_id'),
+                                request.get('message_channel_id')
+                            )
+                            await self.ws_manager.send_to_client(webui_client_id, completion_msg)
+
+                        logger.info(f"✅ Circuit breaker retry successful - request completed with conservative profile")
+                        return result  # Success - don't raise exception
+
+                    except Exception as retry_error:
+                        logger.error(f"❌ Circuit breaker retry failed: {retry_error}")
+                        # Fall through to send error message below
+
+            # No circuit breaker recovery - send error as normal
+            client_id = bot_id or webui_client_id
+            if client_id:
+                error_msg = await formatter.format_error(
+                    request_id,
+                    f"Generation interrupted: {str(e)}",
+                    request.get('channel_id'),
+                    request.get('message_id'),
+                    request.get('message_channel_id')
+                )
+                # For Discord, mark as complete with error
+                if bot_id:
+                    error_msg['is_complete'] = True
+                    error_msg['error'] = True
+                await self.ws_manager.send_to_client(client_id, error_msg)
 
             raise  # Re-raise for retry handling

@@ -37,7 +37,7 @@ class OutputArtifactStrategy(ProcessingStrategy):
         self.prompt_composer = PromptComposer()
         self.extraction_prompt = self.prompt_composer.get_extraction_prompt()
 
-        self.keep_alive = get_ollama_keep_alive()  # Get from config for consistency
+        self.keep_alive = get_ollama_keep_alive(self.model)  # Per-model keep_alive
 
         logger.info(f"✅ OutputArtifactStrategy initialized with model: {self.model}")
         logger.info("✅ Extraction prompt loaded from JSON config")
@@ -50,6 +50,8 @@ class OutputArtifactStrategy(ProcessingStrategy):
             - user_message: Original user message
             - llm_response: LLM's response
             - file_service: FileService instance
+            - extraction_model: (Optional) Override model for extraction.
+                                Typically set to profile.artifact_extraction_model.
 
         Returns:
             List of created artifact metadata
@@ -57,15 +59,16 @@ class OutputArtifactStrategy(ProcessingStrategy):
         user_message = context.get('user_message', '')
         llm_response = context.get('llm_response', '')
         file_service = context.get('file_service')
+        extraction_model = context.get('extraction_model') or self.model
 
         if not file_service:
-            logger.error("❌ FileService not provided in context")
+            logger.error("FileService not provided in context")
             return []
 
-        logger.info(f"📋 Extracting artifact details using {self.model}")
+        logger.info(f"Extracting artifact details using {extraction_model}")
 
         # Use thinking model to intelligently extract, filter, complete, and reformat artifacts
-        artifact_data = await self._extract_artifact_data(user_message, llm_response)
+        artifact_data = await self._extract_artifact_data(user_message, llm_response, extraction_model)
 
         if not artifact_data or not artifact_data.get('filename'):
             logger.info("ℹ️  No artifact to create")
@@ -98,17 +101,19 @@ class OutputArtifactStrategy(ProcessingStrategy):
             logger.error(f"❌ Failed to create artifact: {e}")
             return []
 
-    async def _extract_artifact_data(self, user_message: str, llm_response: str) -> Dict:
+    async def _extract_artifact_data(self, user_message: str, llm_response: str, extraction_model: str = None) -> Dict:
         """
         Use thinking model to intelligently extract, filter, complete, and reformat artifact from conversation.
 
         Args:
             user_message: User's request
             llm_response: LLM's response
+            extraction_model: Model to use for extraction (defaults to self.model)
 
         Returns:
             Dict with filename, content, artifact_type (or empty dict)
         """
+        model_to_use = extraction_model or self.model
         # Build conversation context for extraction
         conversation = f"""USER REQUEST: {user_message}
 
@@ -118,12 +123,15 @@ ASSISTANT RESPONSE: {llm_response}"""
         prompt = f"{self.extraction_prompt}\n\n{conversation}"
 
         try:
+            # Get keep_alive for the model being used
+            model_keep_alive = get_ollama_keep_alive(model_to_use)
+
             # Create OllamaModel for deterministic extraction (no thinking mode)
             ollama_model = OllamaModel(
                 host=self.ollama_host,
-                model_id=self.model,
+                model_id=model_to_use,
                 temperature=0.1,  # Low temperature for consistent parsing
-                keep_alive=self.keep_alive
+                keep_alive=model_keep_alive
             )
 
             # Create agent (no tools needed for extraction)
@@ -153,11 +161,11 @@ ASSISTANT RESPONSE: {llm_response}"""
 
             try:
                 artifact_data = json.loads(json_str)
-                logger.info(f"✅ Successfully parsed JSON from {self.model}")
+                logger.info(f"Successfully parsed JSON from {model_to_use}")
             except json.JSONDecodeError as e:
-                logger.error(f"❌ JSON parsing failed: {e}")
-                logger.error(f"📝 {self.model} returned invalid JSON. Raw response: {json_str[:500]}")
-                logger.error("⚠️  Model did not follow the CRITICAL JSON escaping instructions!")
+                logger.error(f"JSON parsing failed: {e}")
+                logger.error(f"{model_to_use} returned invalid JSON. Raw response: {json_str[:500]}")
+                logger.error("Model did not follow the CRITICAL JSON escaping instructions!")
                 return {}
 
             if not artifact_data.get('filename'):

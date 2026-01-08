@@ -93,7 +93,7 @@ class MessageHandler:
         data = {
             'type': 'message',
             'user_id': str(message.author.id),
-            'thread_id': thread_id,  # Now uses actual Discord thread ID!
+            'conversation_id': thread_id,  # Discord thread ID = conversation ID
             'message': content,
             'message_id': str(message.id),
             'channel_id': str(thread.id),  # Thread ID for responses

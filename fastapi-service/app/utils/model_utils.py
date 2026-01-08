@@ -1,25 +1,52 @@
 """Utility functions for model configuration."""
-from app.config import settings
-from strands.models.ollama import OllamaModel
-import asyncio
-import aiohttp
+from app.config import settings, get_model_capabilities
 import logging_client
+from typing import Optional
 
 logger = logging_client.setup_logger('fastapi')
 
 
-def get_ollama_keep_alive() -> str:
+def get_ollama_keep_alive(model_name: Optional[str] = None) -> str:
     """
-    Get Ollama keep_alive parameter from config.
+    Get Ollama keep_alive parameter from model capabilities or config.
 
-    Converts OLLAMA_KEEP_ALIVE integer setting to Ollama-compatible format:
-    - 0 -> "0s" (immediate unload)
-    - 300 -> "300s" (keep for 5 minutes)
-    - -1 -> "-1" (never unload)
+    Respects per-model keep_alive settings from ModelCapabilities.
+    Falls back to priority-based defaults or global setting if not specified.
+
+    Args:
+        model_name: Model identifier (e.g., "gpt-oss:20b")
+                    If None, uses global OLLAMA_KEEP_ALIVE setting
 
     Returns:
         str: Formatted keep_alive value for OllamaModel
+
+    Examples:
+        - gpt-oss:20b → "30m" (HIGH priority, per-model setting)
+        - Unknown model → "1800s" (global default)
     """
+    # Try to get per-model keep_alive setting
+    if model_name:
+        capabilities = get_model_capabilities(model_name)
+
+        if capabilities:
+            # Check for explicit keep_alive in backend options
+            keep_alive = capabilities.backend.options.get("keep_alive")
+            if keep_alive:
+                logger.debug(f"Using per-model keep_alive for {model_name}: {keep_alive}")
+                return keep_alive
+
+            # Fallback: Use priority to determine default keep_alive
+            priority_defaults = {
+                "CRITICAL": "60m",  # Critical models stay hot
+                "HIGH": "30m",       # Router, fast coder
+                "NORMAL": "15m",     # Standard models
+                "LOW": "5m"          # Large models, evict quickly
+            }
+            default = priority_defaults.get(capabilities.priority, "15m")
+            logger.debug(f"Using priority-based keep_alive for {model_name}: {default} (priority={capabilities.priority})")
+            return default
+
+    # Fallback to global setting (for backward compatibility)
     if settings.OLLAMA_KEEP_ALIVE >= 0:
         return f"{settings.OLLAMA_KEEP_ALIVE}s"
     return "-1"
@@ -27,84 +54,22 @@ def get_ollama_keep_alive() -> str:
 
 async def force_unload_model(model_id: str) -> None:
     """
-    Force unload model immediately (override keep_alive).
+    Force unload model immediately via VRAMOrchestrator.
 
-    Polls Ollama's /api/ps endpoint to verify model is fully unloaded from VRAM
-    before returning (prevents VRAM overlap on 16GB GPU).
-
-    Used when router classified to non-SELF_HANDLE to free VRAM
-    for different target model (16GB constraint).
+    Uses the orchestrator's mark_as_unloaded() method which:
+    - Routes to correct backend manager (Ollama, TensorRT, vLLM)
+    - Updates VRAM registry
+    - Ensures multi-backend compatibility
 
     Args:
         model_id: Model identifier (e.g., "gpt-oss:20b")
     """
     try:
-        from strands import Agent
+        from app.services.vram import get_orchestrator
 
-        dummy_model = OllamaModel(
-            host=settings.OLLAMA_HOST,
-            model_id=model_id,
-            keep_alive="0s"  # Override existing keep_alive
-        )
+        orchestrator = get_orchestrator()
+        await orchestrator.mark_as_unloaded(model_id)
 
-        # Use Agent wrapper to trigger minimal inference (forces unload with keep_alive=0s)
-        agent = Agent(model=dummy_model, tools=[])
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, agent, "x")  # Agent is callable
-
-        logger.debug(f"🔽 Force unload requested for {model_id}")
-
-        # Poll until model is truly unloaded from VRAM
-        success = await _wait_for_model_unload(model_id)
-
-        if success:
-            logger.debug(f"✅ Confirmed {model_id} fully unloaded")
-        else:
-            logger.warning(f"⚠️  Could not confirm {model_id} unload - continuing anyway")
+        logger.debug(f"✅ Force unload complete for {model_id} via orchestrator")
     except Exception as e:
         logger.warning(f"⚠️  Force unload failed for {model_id}: {e}")
-
-
-async def _wait_for_model_unload(model_id: str, timeout: float = 10.0, poll_interval: float = 0.3) -> bool:
-    """
-    Poll Ollama's /api/ps endpoint until model disappears from VRAM.
-
-    Args:
-        model_id: Model identifier to wait for
-        timeout: Maximum time to wait in seconds (default: 10s)
-        poll_interval: Time between polls in seconds (default: 0.3s)
-
-    Returns:
-        bool: True if model unloaded successfully, False if timeout occurred
-    """
-    start_time = asyncio.get_event_loop().time()
-    attempt = 0
-
-    while True:
-        attempt += 1
-
-        try:
-            # Check if model is still loaded in VRAM
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{settings.OLLAMA_HOST}/api/ps") as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        loaded_models = [m['name'] for m in data.get('models', [])]
-
-                        # Check if our model is still in the list
-                        if model_id not in loaded_models:
-                            # Model successfully unloaded!
-                            logger.debug(f"🎯 {model_id} unloaded after {attempt} polls")
-                            return True
-
-        except Exception as e:
-            logger.debug(f"⚠️  Poll attempt {attempt} failed: {e}")
-
-        # Check timeout
-        elapsed = asyncio.get_event_loop().time() - start_time
-        if elapsed >= timeout:
-            logger.warning(f"⏱️  Timeout waiting for {model_id} to unload ({elapsed:.1f}s)")
-            return False  # Timeout - continue anyway, don't block execution
-
-        # Wait before next poll
-        await asyncio.sleep(poll_interval)

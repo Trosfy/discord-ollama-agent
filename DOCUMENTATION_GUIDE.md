@@ -272,9 +272,10 @@ REDIS_PORT=6379
 1. `logging-service` (port 9999) - Centralized logging
 2. `dynamodb-local` (port 8000) - Local database
 + 3. `cache-service` (port 6379) - Redis cache  # Add this
-3. `fastapi-service` (port 8001) - Main API
-4. `discord-bot` (port 9997) - Discord connection
-5. `monitoring-service` (port 8080) - Health dashboard
+3. `auth-service` (port 8002) - Authentication
+4. `admin-service` (port 8003) - Admin API
+5. `fastapi-service` (port 8001) - Main API
+6. `discord-bot` (port 9997) - Discord connection
 ```
 
 **Section: Troubleshooting → Common Issues**

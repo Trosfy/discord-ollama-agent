@@ -2,10 +2,12 @@
 import sys
 sys.path.insert(0, '/shared')
 
+import asyncio
 from typing import Dict
 import re
+import uuid
 
-from app.config import settings, get_model_capabilities
+from app.config import settings, get_model_capabilities, get_active_profile
 from app.interfaces.storage import IConversationStorage, IUserStorage
 from app.interfaces.llm import LLMInterface
 from app.services.context_manager import ContextManager
@@ -20,6 +22,52 @@ import logging_client
 logger = logging_client.setup_logger('fastapi')
 
 
+def inject_reference_urls(text: str, references: list) -> str:
+    """
+    Replace inline 【title】 citations with markdown [title](url) links.
+
+    Args:
+        text: Response text with 【】 citations
+        references: List of {'title': str, 'url': str} dicts
+
+    Returns:
+        Text with 【】 replaced by markdown links
+    """
+    if not references:
+        return text
+
+    # Create lookup dict (case-insensitive, normalized)
+    ref_lookup = {}
+    for ref in references:
+        title = ref['title']
+        # Normalize: lowercase, strip whitespace
+        normalized = title.lower().strip()
+        ref_lookup[normalized] = ref['url']
+
+    def replace_citation(match):
+        citation_text = match.group(1)  # Text inside 【】
+        normalized = citation_text.lower().strip()
+
+        # Try exact match first
+        if normalized in ref_lookup:
+            url = ref_lookup[normalized]
+            return f"[{citation_text}]({url})"
+
+        # Try partial match (citation contains ref title or vice versa)
+        for ref_title, url in ref_lookup.items():
+            if ref_title in normalized or normalized in ref_title:
+                return f"[{citation_text}]({url})"
+
+        # No match found - leave as is but log warning
+        logger.warning(f"⚠️  No URL found for citation: 【{citation_text}】")
+        return match.group(0)  # Return original 【text】
+
+    # Replace all 【...】 patterns
+    result = re.sub(r'【([^】]+)】', replace_citation, text)
+
+    return result
+
+
 class Orchestrator:
     """Coordinates all services without containing business logic (SOLID)."""
 
@@ -32,7 +80,9 @@ class Orchestrator:
         token_tracker: TokenTracker,
         summarization_service: SummarizationService,
         router_service: RouterService,
-        strategy_registry  # NEW: Inject registry (DIP)
+        strategy_registry,  # NEW: Inject registry (DIP)
+        profile_manager = None,  # NEW: Inject ProfileManager (DIP)
+        preference_resolver = None  # NEW: Inject PreferenceResolver (DIP)
     ):
         """
         Initialize orchestrator with all required services.
@@ -46,6 +96,8 @@ class Orchestrator:
             summarization_service: Summarization service
             router_service: Router service for request classification
             strategy_registry: Strategy registry for postprocessing
+            profile_manager: ProfileManager for circuit breaker fallback (optional)
+            preference_resolver: PreferenceResolver for unified model preference handling
         """
         self.conversation_storage = conversation_storage
         self.user_storage = user_storage
@@ -55,7 +107,75 @@ class Orchestrator:
         self.summarization_service = summarization_service
         self.router_service = router_service
         self.strategy_registry = strategy_registry
+        self.profile_manager = profile_manager
+        self.preference_resolver = preference_resolver
         self.file_context_builder = FileContextBuilder()  # SOLID: Extract preprocessing
+
+    async def _resolve_route_config(
+        self,
+        request: Dict,
+        user_prefs: Dict,
+        file_refs: list,
+        user_message_content: str,
+        source: str
+    ) -> tuple:
+        """
+        Single entry point for route resolution (DRY principle).
+
+        Uses PreferenceResolver to unify preference handling across all interfaces.
+        Artifact detection runs regardless of routing bypass.
+
+        Args:
+            request: Request dictionary
+            user_prefs: User preferences from storage
+            file_refs: List of file references
+            user_message_content: Message with file context appended
+            source: Source of request ('discord' or 'webui')
+
+        Returns:
+            Tuple of (route_config, resolved_preferences)
+        """
+        from app.services.preference_resolver import ResolvedPreferences
+
+        # Use PreferenceResolver if available, otherwise fall back to legacy logic
+        if self.preference_resolver:
+            resolved = self.preference_resolver.resolve(request, user_prefs)
+
+            if resolved.should_bypass_routing:
+                # Bypass routing but STILL run artifact detection
+                output_artifact = await self.router_service.output_detector.detect(
+                    user_message_content,
+                    model=resolved.artifact_detection_model
+                )
+
+                # Check for input artifacts (deterministic)
+                input_artifact = len(file_refs) > 0
+
+                route_config = {
+                    'route': 'SELF_HANDLE',
+                    'model': resolved.model,
+                    'mode': 'single',
+                    'preprocessing': ['INPUT_ARTIFACT'] if input_artifact else [],
+                    'postprocessing': ['OUTPUT_ARTIFACT'] if output_artifact else [],
+                    'source': source,
+                    'user_selected_model': True
+                }
+                logger.info(f"Bypassed routing via {resolved.model_source}: {resolved.model}")
+            else:
+                # Full routing with artifact detection
+                route_config = await self.router_service.classify_request(
+                    user_message=user_message_content,
+                    file_refs=file_refs,
+                    artifact_detection_model=resolved.artifact_detection_model
+                )
+                route_config['source'] = source
+                logger.info(f"Routed to: {route_config['route']} via router")
+
+            return route_config, resolved
+        else:
+            # Legacy fallback (no PreferenceResolver)
+            logger.warning("PreferenceResolver not configured - using legacy routing")
+            return None, None
 
     async def process_request(
         self,
@@ -75,7 +195,7 @@ class Orchestrator:
         7. Update token usage
 
         Args:
-            request: Request dictionary with user_id, thread_id, message, etc.
+            request: Request dictionary with user_id, conversation_id, message, etc.
             route_config: Optional route config to skip routing (for retries)
 
         Returns:
@@ -84,6 +204,10 @@ class Orchestrator:
         Raises:
             Exception: If token budget exceeded or generation fails
         """
+        # Step 0: Check if we can recover from fallback (ProfileManager health check)
+        if self.profile_manager:
+            await self.profile_manager.check_and_recover()
+
         # Log incoming request
         logger.info(f"📥 Processing request from user {request['user_id']}: {request['message']}")
 
@@ -111,9 +235,9 @@ class Orchestrator:
                     f"Token budget exceeded. Remaining: {user_tokens['tokens_remaining']}"
                 )
 
-        # Step 4: Load thread context
-        context = await self.context_manager.get_thread_context(
-            request['thread_id'],
+        # Step 4: Load conversation context
+        context = await self.context_manager.get_conversation_context(
+            request['conversation_id'],
             request['user_id']
         )
 
@@ -121,7 +245,7 @@ class Orchestrator:
         total_tokens = sum(msg['token_count'] for msg in context)
         if total_tokens > user_prefs['auto_summarize_threshold']:
             context = await self.summarization_service.summarize_and_prune(
-                thread_id=request['thread_id'],
+                conversation_id=request['conversation_id'],
                 messages=context,
                 user_id=request['user_id']
             )
@@ -143,60 +267,67 @@ class Orchestrator:
         from app.dependencies import set_current_request
         set_current_request(request)
 
-        # Step 8: Check for user model preference and optionally skip router
-        file_refs = request.get('file_refs', [])
-        preferred_model = user_prefs.get('preferred_model')
+        # Step 8: Resolve routing using PreferenceResolver (unified preference handling)
+        source = request.get('metadata', {}).get('source', 'discord')
+        resolved_prefs = None  # Will hold ResolvedPreferences if PreferenceResolver is used
 
-        if route_config is None:  # NEW: Skip routing if config provided
-            if preferred_model:
-                # User wants specific model - skip router classification entirely!
-                logger.info(f"👤 Using user preferred model {preferred_model}, skipping classification")
-                route_config = {
-                    'route': 'SELF_HANDLE',  # Treat as direct execution
-                    'model': preferred_model,
-                    'mode': 'single',
-                    'preprocessing': ['INPUT_ARTIFACT'] if len(file_refs) > 0 else [],
-                    'postprocessing': []  # Will be determined by output detector if needed
-                }
+        if route_config is None:
+            route_config, resolved_prefs = await self._resolve_route_config(
+                request=request,
+                user_prefs=user_prefs,
+                file_refs=file_refs,
+                user_message_content=user_message_content,
+                source=source
+            )
+
+            # Legacy fallback if PreferenceResolver not configured
+            if route_config is None:
+                # Fall back to old routing logic
+                preferred_model = user_prefs.get('preferred_model')
+                if preferred_model:
+                    route_config = {
+                        'route': 'SELF_HANDLE',
+                        'model': preferred_model,
+                        'mode': 'single',
+                        'preprocessing': ['INPUT_ARTIFACT'] if len(file_refs) > 0 else [],
+                        'postprocessing': [],
+                        'source': source
+                    }
+                else:
+                    route_config = await self.router_service.classify_request(
+                        user_message=user_message_content,
+                        file_refs=file_refs
+                    )
+                    route_config['source'] = source
+        else:
+            logger.info(f"Reusing route config: {route_config['route']}")
+
+        # Get temperature from resolved preferences or fall back to user_prefs
+        if resolved_prefs:
+            temperature = resolved_prefs.temperature
+        else:
+            # Legacy fallback
+            temperature = user_prefs.get('temperature')
+            if temperature is None:
+                temperature = settings.DEFAULT_TEMPERATURE
             else:
-                # Use router for classification WITH enriched message (includes file content)
-                route_config = await self.router_service.classify_request(
-                    user_message=user_message_content,
-                    file_refs=file_refs
-                )
-                logger.info(f"🎯 Routed to: {route_config['route']} ({route_config})")
-        else:
-            logger.info(f"♻️  Reusing route config: {route_config['route']} ({route_config})")
-
-        # Use user's temperature preference, fallback to DEFAULT_TEMPERATURE
-        temperature = user_prefs.get('temperature')
-        if temperature is None:
-            temperature = settings.DEFAULT_TEMPERATURE
-        else:
-            temperature = float(temperature)
+                temperature = float(temperature)
 
         # Step 9: Smart router reuse logic (check if we can reuse router for SELF_HANDLE)
+        # NOTE: This is only needed when router is a SEPARATE model from execution model
+        # In performance profile, router == execution model (gpt-oss:120b), so no special handling needed
         if route_config['route'] == 'SELF_HANDLE' and route_config['model'] == settings.ROUTER_MODEL:
-            # Check if user has custom settings that differ from router defaults
-            user_temp = user_prefs.get('temperature')
-            user_thinking = user_prefs.get('thinking_enabled')
-
-            # Router defaults: temp=0.1, thinking=None
-            has_custom_temp = (user_temp is not None and user_temp != 0.1)
-            has_custom_thinking = (user_thinking is not None)
-
-            if not has_custom_temp and not has_custom_thinking:
-                # Perfect match! Reuse router with keep_alive=120s
-                logger.debug(f"✅ Reusing router for SELF_HANDLE (all defaults)")
-                # Router stays loaded, will be used for execution
-            else:
-                # User has custom settings - need to reload
-                logger.debug(f"🔄 Reloading router with user settings (temp={user_temp}, thinking={user_thinking})")
-                await force_unload_model(settings.ROUTER_MODEL)
+            # Router model will be used for execution - it just stays loaded
+            # No need to unload/reload when router == execution model
+            logger.debug(f"✅ Reusing {settings.ROUTER_MODEL} for SELF_HANDLE (router == execution model)")
         elif route_config['route'] != 'SELF_HANDLE':
-            # Different model needed - force unload router
-            await force_unload_model(settings.ROUTER_MODEL)
-            logger.debug(f"🔄 Unloaded router to load {route_config['model']}")
+            # Different model needed - unload router (conservative mode only)
+            if settings.VRAM_CONSERVATIVE_MODE:
+                await force_unload_model(settings.ROUTER_MODEL)
+                logger.debug(f"🔽 Conservative mode: Unloaded router to load {route_config['model']}")
+            else:
+                profile_name = get_active_profile().profile_name.title()
+                logger.debug(f"💤 {profile_name} profile: Router + {route_config['model']} can coexist (orchestrator manages eviction)")
 
         # Step 10: Use filtered prompt for main LLM if available (clean file language)
         # NOTE: OCR preprocessing removed - file content already in user_message_content via FileContextBuilder
@@ -210,7 +341,7 @@ class Orchestrator:
             route_config=route_config,
             temperature=temperature,
             user_base_prompt=user_prefs.get('base_prompt'),
-            user_thinking_enabled=user_prefs.get('thinking_enabled')
+            user_thinking_enabled=resolved_prefs.thinking_enabled if resolved_prefs else user_prefs.get('thinking_enabled')
         )
 
         # Format and append references if present
@@ -224,23 +355,21 @@ class Orchestrator:
 
         references = response.get('references', [])
 
+        # Inject URLs into inline 【】 citations
+        if references:
+            response_content = inject_reference_urls(response_content, references)
+            logger.debug(f"🔗 Injected URLs into {len(references)} inline citations")
+
         # Log generated response (replace newlines for clean single-line log)
         preview = response_content[:150].replace('\n', ' ').replace('\r', ' ')
         logger.info(f"📤 Generated response for user {request['user_id']}: {preview}{'...' if len(response_content) > 150 else ''}")
 
-        if references:
-            # Format references section at the END of response
-            # This ensures references appear in the LAST chunk when Discord splits message
-            ref_lines = ["\n\n---", "**References:**"]
-            for i, ref in enumerate(references, 1):
-                # Use Discord markdown hyperlink format: [text](url)
-                ref_lines.append(f"[{i}] [{ref['title']}]({ref['url']})")
-
-            response_content += '\n'.join(ref_lines)
+        # Note: References are now injected inline, no need for separate section
+        # (The old code that appended references at the end is removed)
 
         # Step 8: Save messages to database
         await self.conversation_storage.add_message(
-            thread_id=request['thread_id'],
+            conversation_id=request['conversation_id'],
             message_id=request['message_id'],
             role='user',
             content=request['message'],
@@ -254,7 +383,7 @@ class Orchestrator:
         )
 
         await self.conversation_storage.add_message(
-            thread_id=request['thread_id'],
+            conversation_id=request['conversation_id'],
             message_id=f"response_{request['message_id']}",
             role='assistant',
             content=response_content,
@@ -263,10 +392,14 @@ class Orchestrator:
             model_used=response['model']
         )
 
-        # Step 8.5: Force unload main LLM if post-processing needed (VRAM management)
+        # Step 8.5: Force unload main LLM if post-processing needed (conservative mode only)
         if 'OUTPUT_ARTIFACT' in route_config.get('postprocessing', []):
-            await force_unload_model(response['model'])
-            logger.debug(f"🔽 Unloaded {response['model']} before post-processing (VRAM management)")
+            if settings.VRAM_CONSERVATIVE_MODE:
+                await force_unload_model(response['model'])
+                logger.debug(f"🔽 Conservative mode: Unloaded {response['model']} before post-processing")
+            else:
+                profile_name = get_active_profile().profile_name.title()
+                logger.debug(f"💤 {profile_name} profile: {response['model']} + extraction model can coexist")
 
         # Step 8.5: Apply postprocessing strategies
         for strategy_name in route_config.get('postprocessing', []):
@@ -280,30 +413,34 @@ class Orchestrator:
                     continue  # Tools worked - skip postprocessing
 
                 # Fallback: Extract from response (for non-tool models or tool failures)
-                logger.info("📦 No artifacts from tools - attempting extraction fallback")
+                logger.info("No artifacts from tools - attempting extraction fallback")
 
-                # Determine extraction model: user preference or system default
-                extraction_model = settings.POST_PROCESSING_OUTPUT_ARTIFACT_MODEL  # System default: ministral-3:14b
-                if preferred_model:
-                    extraction_model = preferred_model
-                    logger.info(f"👤 Using user's model {extraction_model} for artifact extraction")
+                # Determine extraction model from resolved preferences or profile fallback
+                if resolved_prefs:
+                    extraction_model = resolved_prefs.artifact_extraction_model
+                    logger.info(f"Using profile artifact extraction model: {extraction_model}")
+                else:
+                    # Fallback: get directly from profile (should not happen with new code)
+                    extraction_model = get_active_profile().artifact_extraction_model
+                    logger.warning(f"⚠️  resolved_prefs is None - falling back to profile: {extraction_model}")
 
-                # Create OutputArtifactStrategy with preferred model
+                # Create OutputArtifactStrategy
                 from app.strategies.output_artifact_strategy import OutputArtifactStrategy
                 strategy = OutputArtifactStrategy(
                     ollama_host=settings.OLLAMA_HOST,
                     model=extraction_model
                 )
 
-                # Execute extraction
+                # Execute extraction with profile-specific model
                 from app.services.file_service import FileService
-                context = {
+                extraction_context = {
                     'user_message': request['message'],
                     'llm_response': response_content,
-                    'file_service': FileService()
+                    'file_service': FileService(),
+                    'extraction_model': extraction_model  # Pass model to strategy
                 }
 
-                artifacts_from_strategy = await strategy.process(context)
+                artifacts_from_strategy = await strategy.process(extraction_context)
 
                 if len(artifacts_from_strategy) > 0:
                     logger.info(f"✅ Extracted {len(artifacts_from_strategy)} artifact(s) via postprocessing fallback")
@@ -363,11 +500,16 @@ class Orchestrator:
                     except Exception as e:
                         logger.warning(f"⚠️  Failed to clean up temp file {storage_path}: {e}")
 
-        # Step 11: Force unload after SELF_HANDLE execution
+        # Step 11: Force unload after SELF_HANDLE execution (conservative mode only)
         if route_config['route'] == 'SELF_HANDLE' and route_config['model'] == settings.ROUTER_MODEL:
-            # Router was reused for execution - now unload it
-            await force_unload_model(settings.ROUTER_MODEL)
-            logger.debug("🔽 Unloaded router after SELF_HANDLE execution")
+            if settings.VRAM_CONSERVATIVE_MODE:
+                # Conservative mode (16GB): Force-unload after each request
+                await force_unload_model(settings.ROUTER_MODEL)
+                logger.debug("🔽 Conservative mode: Unloaded router after SELF_HANDLE")
+            else:
+                # High-VRAM profiles (performance/balanced): Trust keep_alive + orchestrator
+                profile_name = get_active_profile().profile_name.title()
+                logger.debug(f"💤 {profile_name} profile: Router stays loaded (keep_alive=30m)")
 
         return {
             'request_id': request['request_id'],
@@ -388,7 +530,7 @@ class Orchestrator:
         Similar to process_request() but streams chunks progressively via callback.
 
         Args:
-            request: Request dictionary with user_id, thread_id, message, etc.
+            request: Request dictionary with user_id, conversation_id, message, etc.
             stream_callback: Async callback function to receive chunks
 
         Returns:
@@ -397,6 +539,10 @@ class Orchestrator:
         Raises:
             Exception: If token budget exceeded or generation fails
         """
+        # Step 0: Check if we can recover from fallback (ProfileManager health check)
+        if self.profile_manager:
+            await self.profile_manager.check_and_recover()
+
         # Log incoming request
         logger.info(f"📥 Processing streaming request from user {request['user_id']}: {request['message']}")
 
@@ -424,9 +570,9 @@ class Orchestrator:
                     f"Token budget exceeded. Remaining: {user_tokens['tokens_remaining']}"
                 )
 
-        # Step 3: Load thread context
-        context = await self.context_manager.get_thread_context(
-            request['thread_id'],
+        # Step 3: Load conversation context
+        context = await self.context_manager.get_conversation_context(
+            request['conversation_id'],
             request['user_id']
         )
 
@@ -434,7 +580,7 @@ class Orchestrator:
         total_tokens = sum(msg['token_count'] for msg in context)
         if total_tokens > user_prefs['auto_summarize_threshold']:
             context = await self.summarization_service.summarize_and_prune(
-                thread_id=request['thread_id'],
+                conversation_id=request['conversation_id'],
                 messages=context,
                 user_id=request['user_id']
             )
@@ -456,57 +602,38 @@ class Orchestrator:
         from app.dependencies import set_current_request
         set_current_request(request)
 
-        # Step 7: Check for user model preference and optionally skip router
-        file_refs = request.get('file_refs', [])
-        preferred_model = user_prefs.get('preferred_model')
+        # Step 7: Resolve routing using PreferenceResolver (unified preference handling)
+        # Both Web UI model selector and Discord /model use the same path via PreferenceResolver
+        source = request.get('metadata', {}).get('source', 'discord')
 
-        if preferred_model:
-            # User wants specific model - skip router classification entirely!
-            logger.info(f"👤 Using user preferred model {preferred_model}, skipping classification [streaming]")
-            route_config = {
-                'route': 'SELF_HANDLE',  # Treat as direct execution
-                'model': preferred_model,
-                'mode': 'single',
-                'preprocessing': ['INPUT_ARTIFACT'] if len(file_refs) > 0 else [],
-                'postprocessing': []  # Will be determined by output detector if needed
-            }
-        else:
-            # Use router for classification WITH enriched message (includes file content)
-            route_config = await self.router_service.classify_request(
-                user_message=user_message_content,
-                file_refs=file_refs
-            )
-            logger.info(f"🎯 Routed to: {route_config['route']} ({route_config}) [streaming]")
+        route_config, resolved_prefs = await self._resolve_route_config(
+            request=request,
+            user_prefs=user_prefs,
+            file_refs=file_refs,
+            user_message_content=user_message_content,
+            source=source
+        )
 
-        # Use user's temperature preference, fallback to DEFAULT_TEMPERATURE
-        temperature = user_prefs.get('temperature')
-        if temperature is None:
-            temperature = settings.DEFAULT_TEMPERATURE
-        else:
-            temperature = float(temperature)
+        logger.info(f"🎯 Route resolved: {route_config['route']} via {resolved_prefs.model_source if resolved_prefs else 'legacy'} [streaming]")
+
+        # Use resolved temperature
+        temperature = resolved_prefs.temperature if resolved_prefs else settings.DEFAULT_TEMPERATURE
 
         # Step 8: Smart router reuse logic (check if we can reuse router for SELF_HANDLE)
+        # NOTE: This is only needed when router is a SEPARATE model from execution model
+        # In performance profile, router == execution model (gpt-oss:120b), so no special handling needed
         if route_config['route'] == 'SELF_HANDLE' and route_config['model'] == settings.ROUTER_MODEL:
-            # Check if user has custom settings that differ from router defaults
-            user_temp = user_prefs.get('temperature')
-            user_thinking = user_prefs.get('thinking_enabled')
-
-            # Router defaults: temp=0.1, thinking=None
-            has_custom_temp = (user_temp is not None and user_temp != 0.1)
-            has_custom_thinking = (user_thinking is not None)
-
-            if not has_custom_temp and not has_custom_thinking:
-                # Perfect match! Reuse router with keep_alive=120s
-                logger.debug(f"✅ Reusing router for SELF_HANDLE (all defaults) [streaming]")
-                # Router stays loaded, will be used for execution
-            else:
-                # User has custom settings - need to reload
-                logger.debug(f"🔄 Reloading router with user settings (temp={user_temp}, thinking={user_thinking}) [streaming]")
-                await force_unload_model(settings.ROUTER_MODEL)
+            # Router model will be used for execution - it just stays loaded
+            # No need to unload/reload when router == execution model
+            logger.debug(f"✅ Reusing {settings.ROUTER_MODEL} for SELF_HANDLE (router == execution model) [streaming]")
         elif route_config['route'] != 'SELF_HANDLE':
-            # Different model needed - force unload router
-            await force_unload_model(settings.ROUTER_MODEL)
-            logger.debug(f"🔄 Unloaded router to load {route_config['model']} [streaming]")
+            # Different model needed - unload router (conservative mode only)
+            if settings.VRAM_CONSERVATIVE_MODE:
+                await force_unload_model(settings.ROUTER_MODEL)
+                logger.debug(f"🔽 Conservative mode: Unloaded router to load {route_config['model']} [streaming]")
+            else:
+                profile_name = get_active_profile().profile_name.title()
+                logger.debug(f"💤 {profile_name} profile: Router + {route_config['model']} can coexist [streaming]")
 
         # Step 9: Stream generation
         # NOTE: OCR preprocessing removed - file content already in user_message_content via FileContextBuilder
@@ -514,6 +641,7 @@ class Orchestrator:
         first_chunk = True
         status_sent = True  # Status already sent by queue_worker before processing
         MIN_CONTENT_LENGTH = 20  # Minimum characters before replacing status indicator
+        generation_start_time = asyncio.get_event_loop().time()  # Track generation timing
 
         # Use filtered prompt for main LLM if available (clean file language)
         if route_config.get('filtered_prompt'):
@@ -527,7 +655,7 @@ class Orchestrator:
             route_config=route_config,
             temperature=temperature,
             user_base_prompt=user_prefs.get('base_prompt'),
-            user_thinking_enabled=user_prefs.get('thinking_enabled')
+            user_thinking_enabled=resolved_prefs.thinking_enabled if resolved_prefs else user_prefs.get('thinking_enabled')
         ):
             chunk_count += 1
             logger.debug(f"🔍 Chunk #{chunk_count}: len={len(chunk)}, stripped_len={len(chunk.strip())}, preview={repr(chunk[:50])}")
@@ -562,6 +690,7 @@ class Orchestrator:
                     continue  # Keep accumulating until we have real content
 
             # Send update only if we have content
+            # Note: Send full accumulated_content (for Discord editing + Web UI delta handling)
             if accumulated_content.strip():
                 logger.debug(f"📤 Sending update: {len(accumulated_content)} chars")
                 await stream_callback(accumulated_content)
@@ -570,9 +699,16 @@ class Orchestrator:
         # Step 9: Finalize accumulated response
         response_content = ''.join(accumulated_chunks)
 
-        # Note: References not captured in streaming mode (ref_hook is per-invocation)
-        # This is a known limitation - consider capturing references differently if needed
+        # Get references from LLM's last streaming invocation
         references = []
+        if hasattr(self.llm, 'last_ref_hook') and self.llm.last_ref_hook:
+            references = self.llm.last_ref_hook.references
+            logger.debug(f"🔗 Captured {len(references)} references from streaming: {[ref['title'] for ref in references]}")
+
+        # Inject URLs into inline 【】 citations
+        if references:
+            response_content = inject_reference_urls(response_content, references)
+            logger.debug(f"🔗 Injected URLs into {len(references)} inline citations (streaming)")
 
         # Log generated response
         preview = response_content[:150].replace('\n', ' ').replace('\r', ' ')
@@ -585,9 +721,12 @@ class Orchestrator:
         logger.debug(f"⏱️  Starting post-generation operations")
 
         # Step 10: Save messages to database
+        # Generate message_id if not present (Web UI doesn't send it, Discord does for reactions)
+        message_id = request.get('message_id') or str(uuid.uuid4())
+
         await self.conversation_storage.add_message(
-            thread_id=request['thread_id'],
-            message_id=request['message_id'],
+            conversation_id=request['conversation_id'],
+            message_id=message_id,
             role='user',
             content=request['message'],
             token_count=request['estimated_tokens'],
@@ -604,19 +743,32 @@ class Orchestrator:
             response_content
         )
 
+        # Get thinking tokens from LLM (for accurate TPS calculation)
+        thinking_tokens = getattr(self.llm, 'last_thinking_tokens', 0)
+        total_tokens_generated = response_tokens + thinking_tokens
+
         # DEBUG: Measure token counting time
         token_count_end = time.time()
-        logger.info(f"⏱️  Token counting: {token_count_end - token_count_start:.2f}s ({response_tokens} tokens)")
+        logger.info(f"⏱️  Token counting: {token_count_end - token_count_start:.2f}s ({response_tokens} output + {thinking_tokens} thinking = {total_tokens_generated} total)")
+
+        # Calculate generation time BEFORE saving to database
+        generation_time = asyncio.get_event_loop().time() - generation_start_time
+
+        # Calculate accurate TPS including thinking tokens
+        tps = total_tokens_generated / generation_time if generation_time > 0 else 0
+        logger.info(f"⚡ TPS: {tps:.1f} t/s (total tokens / time)")
+
         assistant_msg_start = time.time()
 
         await self.conversation_storage.add_message(
-            thread_id=request['thread_id'],
-            message_id=f"response_{request['message_id']}",
+            conversation_id=request['conversation_id'],
+            message_id=f"response_{message_id}",
             role='assistant',
             content=response_content,
             token_count=response_tokens,
             user_id=request['user_id'],
-            model_used=route_config['model']
+            model_used=route_config['model'],
+            generation_time=generation_time  # Save tokens/sec calculation
         )
 
         # DEBUG: Measure assistant message DB write time
@@ -648,11 +800,14 @@ class Orchestrator:
                 extraction_start = time.time()
                 logger.info("📦 No artifacts from tools - attempting extraction fallback")
 
-                # Determine extraction model: user preference or system default
-                extraction_model = settings.POST_PROCESSING_OUTPUT_ARTIFACT_MODEL  # System default: ministral-3:14b
-                if preferred_model:
-                    extraction_model = preferred_model
-                    logger.info(f"👤 Using user's model {extraction_model} for artifact extraction [streaming]")
+                # Determine extraction model from resolved preferences
+                if resolved_prefs:
+                    extraction_model = resolved_prefs.artifact_extraction_model
+                    logger.info(f"Using profile artifact extraction model: {extraction_model} [streaming]")
+                else:
+                    # Fallback: get directly from profile (should not happen)
+                    extraction_model = get_active_profile().artifact_extraction_model
+                    logger.warning(f"⚠️  resolved_prefs is None - falling back to profile: {extraction_model} [streaming]")
 
                 # Create OutputArtifactStrategy with preferred model
                 from app.strategies.output_artifact_strategy import OutputArtifactStrategy
@@ -737,10 +892,18 @@ class Orchestrator:
         #     await force_unload_model(settings.ROUTER_MODEL)
         #     logger.debug("🔽 Unloaded router after SELF_HANDLE execution [streaming]")
 
+        # generation_time already calculated earlier before DB save (line 758)
+        # Get thinking tokens for accurate TPS (calculated earlier at line 750-751)
+        thinking_tokens = getattr(self.llm, 'last_thinking_tokens', 0)
+        total_tokens_generated = response_tokens + thinking_tokens
+
         return {
             'request_id': request['request_id'],
             'response': response_content,
             'tokens_used': total_tokens_used,
+            'generation_time': generation_time,  # seconds
+            'output_tokens': response_tokens,  # For display
+            'total_tokens_generated': total_tokens_generated,  # For accurate TPS (includes thinking)
             'model': route_config['model'],
             'artifacts': artifacts,
             'route_config': route_config  # NEW: Return for retry reuse

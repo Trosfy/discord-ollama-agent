@@ -1,0 +1,138 @@
+# SearXNG Configuration
+# Complete anti-WAF: User-Agent rotation, custom headers, delays via timeouts
+
+use_default_settings: true
+
+server:
+  secret_key: "efb94e2ac432cb87d575a0040adac02980eea563bbb1b702f8a1ce479f86dfb3"
+  limiter: false  # Disabled (causes issues), using engine-level delays instead
+  image_proxy: true
+  http_protocol_version: "1.1"
+
+ui:
+  default_locale: "en"
+  query_in_title: false
+  infinite_scroll: false
+  default_theme: "simple"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+# Anti-WAF: Outgoing request configuration
+outgoing:
+  # Anti-WAF: User-Agent rotation (random per request)
+  useragent_suffix: ""
+  
+  # Anti-WAF: 7 different User-Agents for rotation
+  useragents:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15"
+    - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
+  
+  # Anti-WAF: Custom headers to mimic real browser requests
+  extra_headers:
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+    Accept-Language: "en-US,en;q=0.9,es;q=0.8"
+    Accept-Encoding: "gzip, deflate, br"
+    DNT: "1"
+    Connection: "keep-alive"
+    Upgrade-Insecure-Requests: "1"
+    Sec-Fetch-Dest: "document"
+    Sec-Fetch-Mode: "navigate"
+    Sec-Fetch-Site: "none"
+    Sec-Fetch-User: "?1"
+    Cache-Control: "max-age=0"
+  
+  # Anti-WAF: Retry logic for failed requests
+  retries: 3
+  
+  # Anti-WAF: Retry on rate limiting and server errors
+  retry_on_http_error: [429, 500, 502, 503, 504]
+  
+  # Anti-WAF: Connection pooling to reuse connections
+  pool_connections: 100
+  pool_maxsize: 100
+  
+  # Anti-WAF: Timeouts (natural delays between engine requests)
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+  
+  # Anti-WAF: Enable HTTP/2 for modern browser appearance
+  enable_http2: true
+  
+  # Anti-WAF: Uncomment to route through Tor/SOCKS proxy for max anonymity
+  # proxies:
+  #   http: socks5h://127.0.0.1:9050
+  #   https: socks5h://127.0.0.1:9050
+
+engines:
+  # Working engines with anti-WAF settings
+  - name: google
+    disabled: false
+    timeout: 10.0
+    retry_on_http_error: [429, 500, 502, 503]
+    # Anti-WAF: Suspend engine for 1hr after failures (natural delay)
+    suspend_time: 3600
+    suspend_end_time: 86400
+  
+  - name: bing
+    disabled: false
+    timeout: 10.0
+    retry_on_http_error: [429, 500, 502, 503]
+    suspend_time: 3600
+    suspend_end_time: 86400
+  
+  - name: brave
+    disabled: false
+    timeout: 10.0
+    retry_on_http_error: [429, 500, 502, 503]
+    suspend_time: 3600
+    suspend_end_time: 86400
+  
+  - name: wikipedia
+    disabled: false
+    timeout: 8.0
+  
+  - name: github
+    disabled: false
+    timeout: 8.0
+  
+  # Additional reliable engines
+  - name: wikidata
+    disabled: false
+    timeout: 8.0
+  
+  - name: arxiv
+    disabled: false
+    timeout: 8.0
+  
+  # DuckDuckGo with aggressive anti-WAF settings
+  - name: duckduckgo
+    disabled: false
+    timeout: 12.0
+    retry_on_http_error: [429, 500, 502, 503, 504]
+    # Anti-WAF: 2hr suspension after failures
+    suspend_time: 7200
+    suspend_end_time: 86400
+  
+  # Problematic engines - disabled
+  - name: qwant
+    disabled: true
+  
+  - name: startpage
+    disabled: true
+  
+  - name: ahmia
+    disabled: true
+  
+  - name: torch
+    disabled: true

@@ -8,10 +8,10 @@ from app.services.summarization_service import SummarizationService
 
 
 @pytest.mark.asyncio
-async def test_context_manager_get_thread_context():
-    """Test retrieving thread context."""
+async def test_context_manager_get_conversation_context():
+    """Test retrieving conversation context."""
     mock_storage = AsyncMock()
-    mock_storage.get_thread_messages.return_value = [
+    mock_storage.get_conversation_messages.return_value = [
         {
             'role': 'user',
             'content': 'Hello',
@@ -27,12 +27,12 @@ async def test_context_manager_get_thread_context():
     ]
 
     context_manager = ContextManager(storage=mock_storage)
-    context = await context_manager.get_thread_context("thread_123", "user_456")
+    context = await context_manager.get_conversation_context("conversation_123", "user_456")
 
     assert len(context) == 2
     assert context[0]['role'] == 'user'
     assert context[1]['role'] == 'assistant'
-    mock_storage.get_thread_messages.assert_called_once_with("thread_123")
+    mock_storage.get_conversation_messages.assert_called_once_with("conversation_123")
 
 
 @pytest.mark.asyncio
@@ -102,7 +102,7 @@ async def test_summarization_service_summarize_and_prune():
     ]
 
     result = await service.summarize_and_prune(
-        thread_id="thread_123",
+        conversation_id="conversation_123",
         messages=messages,
         user_id="user_456"
     )
@@ -140,7 +140,7 @@ async def test_summarization_no_prune_if_few_messages():
     ]
 
     result = await service.summarize_and_prune(
-        thread_id="thread_123",
+        conversation_id="conversation_123",
         messages=messages,
         user_id="user_456"
     )

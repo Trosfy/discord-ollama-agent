@@ -1,0 +1,28 @@
+FORMAT RULES:
+- Use **bold text** for headings
+- Use bullet lists with - for comparisons/data
+- Use ```language for code blocks
+- NO ##headers (Discord doesn't render them well)
+- NO bracket citations [1] [2] [3] (use inline names)
+
+CRITICAL - COMPARISON DATA FORMATTING:
+⚠️ NEVER use markdown tables with pipes (|) - Discord renders them as broken plain text.
+ALWAYS format comparisons as structured bullet lists instead.
+
+❌ WRONG (table):
+| Aspect | Option A | Option B |
+|--------|----------|----------|
+| Feature | Value 1  | Value 2  |
+
+✅ CORRECT (bullets):
+**Comparison:**
+- **Aspect 1**: Option A does X. Option B does Y.
+- **Aspect 2**: Option A has advantage X but limitation Y. Option B trades Z for W.
+- **Use case**: Option A works best for scenario X. Option B excels when you need Y.
+
+Example (conversational start):
+Here are the key points:
+
+**Key points:**
+- **Point 1**: Description
+- **Point 2**: Description

@@ -1,0 +1,212 @@
+# Docker Compose - Infrastructure Services
+#
+# Always-on core services that the admin dashboard depends on.
+# These services should NOT be stopped by the master toggle.
+#
+# Services:
+# - logging-service: Centralized logging for all services
+# - dynamodb-local: Database for auth, conversations, and metadata
+# - auth-service: JWT authentication and user management
+# - admin-service: Admin API backend (system metrics, container management)
+# - web-service: Admin dashboard UI (Next.js)
+#
+# Usage:
+#   Start all: docker compose -f docker-compose.infra.yml -f docker-compose.app.yml up -d
+#   Stop only apps: docker compose -f docker-compose.app.yml down
+#   View infra logs: docker compose -f docker-compose.infra.yml logs -f
+
+services:
+  logging-service:
+    build: ./logging-service
+    container_name: trollama-logging
+    volumes:
+      - ./logs:/app/logs
+      - ./shared:/shared
+    ports:
+      - "9999:9999"
+      - "9998:9998"  # Health check port
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9998/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: trollama-dynamodb
+    ports:
+      - "8000:8000"
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/8000' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  auth-service:
+    build: ./auth-service
+    container_name: trollama-auth
+    ports:
+      - "8002:8002"  # Auth service port
+    command: >
+      sh -c "python setup_admin.py && uvicorn app.main:app --host 0.0.0.0 --port 8002"
+    environment:
+      - DYNAMODB_ENDPOINT=http://dynamodb-local:8000
+      - DYNAMODB_REGION=us-east-1
+      - DYNAMODB_ACCESS_KEY=test
+      - DYNAMODB_SECRET_KEY=test
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+      - LOGGING_HOST=logging-service
+      - LOGGING_PORT=9999
+      - PYTHONPATH=/shared
+    volumes:
+      - ./auth-service:/app
+      - ./shared:/shared
+    depends_on:
+      dynamodb-local:
+        condition: service_healthy
+      logging-service:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  admin-service:
+    build: ./admin-service
+    container_name: trollama-admin
+    ports:
+      - "8003:8000"  # Admin service port
+    command: >
+      sh -c "python /shared/init_dynamodb.py && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Allow access to host services (Ollama)
+    group_add:
+      - "988"  # Add host docker group GID for socket access
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [utility]  # Only need utility for nvidia-smi
+    env_file:
+      - .env
+    environment:
+      - DYNAMODB_ENDPOINT=http://trollama-dynamodb:8000
+      - DYNAMODB_REGION=us-east-1
+      - DYNAMODB_ACCESS_KEY=test
+      - DYNAMODB_SECRET_KEY=test
+      - FASTAPI_URL=http://trollama-fastapi:8000
+      - AUTH_SERVICE_URL=http://trollama-auth:8002
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+      - DISCORD_ADMIN_WEBHOOK_URL=${DISCORD_ADMIN_WEBHOOK_URL}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - LOGGING_HOST=trollama-logging
+      - LOGGING_PORT=9999
+      - PYTHONPATH=/shared
+      - HOST_PROJECT_ROOT=/home/trosfy/projects/discord-ollama-agent
+      # SSH configuration for host script execution
+      - SSH_HOST=host.docker.internal
+      - SSH_USER=${SSH_USER:-trosfy}
+      - SSH_KEY_PATH=/home/app/.ssh/id_ed25519
+    volumes:
+      - ./admin-service:/app  # Mount codebase for hot reload
+      - ./shared:/shared
+      - ./logs:/app/logs  # Log directory for cleanup service
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for container management
+      - ~/.ssh/admin_service_key:/home/app/.ssh/id_ed25519:ro  # SSH key for host script execution
+      - /home/trosfy/projects/discord-ollama-agent:/host/project:ro  # Host project for script validation
+    depends_on:
+      dynamodb-local:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+      logging-service:
+        condition: service_healthy
+      # NOTE: fastapi-service dependency removed - admin can run without it
+      # It will just show fastapi as "unhealthy" in monitoring
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  web-service:
+    build:
+      context: ./web-service
+      args:
+        NEXT_PUBLIC_API_URL: http://${PUBLIC_HOSTNAME}:8001
+        NEXT_PUBLIC_WS_URL: ws://${PUBLIC_HOSTNAME}:8001
+        NEXT_PUBLIC_AUTH_URL: http://${PUBLIC_HOSTNAME}:8002
+        NEXT_PUBLIC_ADMIN_API_URL: http://${PUBLIC_HOSTNAME}:8003
+    container_name: trollama-web
+    ports:
+      - "8080:3000"  # Next.js web interface (host:container)
+    env_file:
+      - .env
+    environment:
+      - NEXT_PUBLIC_API_URL=http://${PUBLIC_HOSTNAME}:8001
+      - NEXT_PUBLIC_WS_URL=ws://${PUBLIC_HOSTNAME}:8001
+      - NEXT_PUBLIC_AUTH_URL=http://${PUBLIC_HOSTNAME}:8002
+      - NEXT_PUBLIC_ADMIN_API_URL=http://${PUBLIC_HOSTNAME}:8003
+      - NODE_ENV=production
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for container management
+      - ./web-service/scripts:/app/scripts  # Host management scripts
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      # NOTE: fastapi-service dependency removed - web dashboard can run without it
+      # Chat functionality won't work but admin dashboard will
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  dynamodb_data:
+    driver: local
+  temp-files:
+    driver: local
+
+networks:
+  default:
+    name: trollama-network

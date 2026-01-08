@@ -14,11 +14,18 @@ logger = logging_client.setup_logger('fastapi')
 
 @tool(
     name="list_attachments",
-    description="List all files attached to the current message. Returns file IDs and metadata for all uploaded files."
+    description="""List all files attached to the current message with their EXTRACTED CONTENT.
+
+Returns file metadata AND the pre-extracted text content from preprocessing.
+- Images: OCR-extracted text
+- PDFs: Extracted text
+- Text/code files: File contents
+
+Use this tool to access uploaded file contents - DO NOT use file_read for user uploads."""
 )
 def list_attachments() -> List[Dict[str, str]]:
     """
-    List all files attached to the user's message.
+    List all files attached to the user's message with extracted content.
 
     Returns:
         List of dicts, each containing:
@@ -26,7 +33,7 @@ def list_attachments() -> List[Dict[str, str]]:
         - filename: Original filename
         - content_type: MIME type
         - size: File size in bytes
-        - has_content: Whether extracted content is available
+        - extracted_content: Pre-extracted text from preprocessing (OCR for images, direct read for text/PDF)
     """
     from app.dependencies import get_current_request
 
@@ -35,21 +42,32 @@ def list_attachments() -> List[Dict[str, str]]:
 
     result = []
     for ref in file_refs:
-        result.append({
+        file_info = {
             'file_id': ref['file_id'],
             'filename': ref['filename'],
             'content_type': ref['content_type'],
             'size': str(ref['size']),
-            'has_content': 'yes' if ref.get('extracted_content') else 'no'
-        })
+            'extracted_content': ref.get('extracted_content', '[No content extracted]')
+        }
+        result.append(file_info)
 
     logger.info(f"📎 Tool: list_attachments | Found {len(result)} file(s)")
     return result
 
 
+# ==============================================================================
+# DEPRECATED TOOLS - No longer registered
+# ==============================================================================
+# These tools have been replaced:
+# - get_file_content → list_attachments (pre-extracted content from preprocessing)
+# - create_artifact → file_write_wrapped (Strands + DiscordExtension for post-processing)
+#
+# Kept for reference only. Not exported in __init__.py
+# ==============================================================================
+
 @tool(
     name="get_file_content",
-    description="Get the extracted text/content from a specific attached file using its file_id. Use list_attachments first to see available files."
+    description="DEPRECATED - Use file_read instead. Get the extracted text/content from a specific attached file using its file_id. Use list_attachments first to see available files."
 )
 def get_file_content(file_id: str) -> Dict[str, str]:
     """

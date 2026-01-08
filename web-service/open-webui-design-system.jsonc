@@ -1,0 +1,1055 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "version": "1.0.0",
+  "source": "open-webui",
+  "analyzed_date": "2025-12-24",
+  "framework": {
+    "frontend": "Svelte 5.0.0 with SvelteKit 2.5.27",
+    "cssFramework": "Tailwind CSS 4.0.0",
+    "uiLibrary": "bits-ui 0.21.15 (headless components)",
+    "buildTool": "Vite 5.4.14",
+    "language": "TypeScript"
+  },
+
+  // ============================================================================
+  // RESPONSIVE BREAKPOINTS
+  // ============================================================================
+  "breakpoints": {
+    "xs": {
+      "min": "0px",
+      "max": "639px",
+      "description": "Mobile devices (portrait)"
+    },
+    "sm": {
+      "min": "640px",
+      "max": "767px",
+      "description": "Mobile devices (landscape), small tablets"
+    },
+    "md": {
+      "min": "768px",
+      "max": "1023px",
+      "description": "Tablets, primary mobile/desktop breakpoint",
+      "note": "This is the primary breakpoint used throughout the app"
+    },
+    "lg": {
+      "min": "1024px",
+      "max": "1279px",
+      "description": "Desktop screens"
+    },
+    "xl": {
+      "min": "1280px",
+      "max": "1535px",
+      "description": "Large desktop screens"
+    },
+    "2xl": {
+      "min": "1536px",
+      "description": "Extra large desktop screens"
+    }
+  },
+
+  // ============================================================================
+  // COLOR SYSTEM
+  // ============================================================================
+  "colors": {
+    "gray": {
+      "description": "13-shade gray scale using CSS variables for dynamic theming",
+      "50": {
+        "value": "#f9f9f9",
+        "cssVar": "var(--color-gray-50, #f9f9f9)",
+        "usage": "Lightest backgrounds, hover states"
+      },
+      "100": {
+        "value": "#ececec",
+        "cssVar": "var(--color-gray-100, #ececec)",
+        "usage": "Light borders, dividers"
+      },
+      "200": {
+        "value": "#e3e3e3",
+        "cssVar": "var(--color-gray-200, #e3e3e3)",
+        "usage": "Subtle backgrounds, borders"
+      },
+      "300": {
+        "value": "#cdcdcd",
+        "cssVar": "var(--color-gray-300, #cdcdcd)",
+        "usage": "Placeholder text (light theme)"
+      },
+      "400": {
+        "value": "#b4b4b4",
+        "cssVar": "var(--color-gray-400, #b4b4b4)",
+        "usage": "Disabled text, icons"
+      },
+      "500": {
+        "value": "#9b9b9b",
+        "cssVar": "var(--color-gray-500, #9b9b9b)",
+        "usage": "Secondary text"
+      },
+      "600": {
+        "value": "#676767",
+        "cssVar": "var(--color-gray-600, #676767)",
+        "usage": "Borders in dark theme"
+      },
+      "700": {
+        "value": "#4e4e4e",
+        "cssVar": "var(--color-gray-700, #4e4e4e)",
+        "usage": "Text in dark theme"
+      },
+      "800": {
+        "value": "#333333",
+        "cssVar": "var(--color-gray-800, #333333)",
+        "usage": "Elevated backgrounds in dark theme"
+      },
+      "850": {
+        "value": "#262626",
+        "cssVar": "var(--color-gray-850, #262626)",
+        "usage": "Input/textarea backgrounds, elevated surfaces",
+        "note": "Extended shade not in standard Tailwind"
+      },
+      "900": {
+        "value": "#171717",
+        "cssVar": "var(--color-gray-900, #171717)",
+        "usage": "Default dark theme background"
+      },
+      "950": {
+        "value": "#0d0d0d",
+        "cssVar": "var(--color-gray-950, #0d0d0d)",
+        "usage": "Darkest backgrounds, borders"
+      }
+    },
+
+    "themes": {
+      "light": {
+        "name": "Light Theme",
+        "background": {
+          "base": "#ffffff",
+          "elevated": "#f9f9f9",
+          "hover": "rgba(0, 0, 0, 0.05)",
+          "overlay": "rgba(0, 0, 0, 0.3)"
+        },
+        "text": {
+          "primary": "#000000",
+          "secondary": "#4e4e4e",
+          "muted": "#676767",
+          "disabled": "#b4b4b4",
+          "placeholder": "#b4b4b4"
+        },
+        "border": {
+          "default": "#e3e3e3",
+          "subtle": "#ececec",
+          "hover": "#9b9b9b"
+        },
+        "scrollbar": {
+          "thumb": "rgba(215, 215, 215, 0.6)",
+          "border": "rgba(255, 255, 255, 1)"
+        }
+      },
+
+      "dark": {
+        "name": "Dark Theme (Default)",
+        "background": {
+          "base": "#171717",
+          "elevated": "#262626",
+          "card": "#333333",
+          "input": "#262626",
+          "hover": "rgba(255, 255, 255, 0.05)",
+          "overlay": "rgba(0, 0, 0, 0.6)"
+        },
+        "text": {
+          "primary": "#eeeeee",
+          "secondary": "#9b9b9b",
+          "muted": "#676767",
+          "disabled": "#4e4e4e",
+          "placeholder": "#cdcdcd"
+        },
+        "border": {
+          "default": "#333333",
+          "subtle": "#262626",
+          "hover": "#4e4e4e",
+          "elevated": "#262626"
+        },
+        "scrollbar": {
+          "thumb": "rgba(67, 67, 67, 0.6)",
+          "border": "rgba(0, 0, 0, 1)"
+        }
+      },
+
+      "oled": {
+        "name": "OLED Dark Theme",
+        "description": "True black theme for OLED displays",
+        "background": {
+          "base": "#000000",
+          "elevated": "#050505",
+          "card": "#101010"
+        },
+        "cssVariableOverrides": {
+          "--color-gray-800": "#101010",
+          "--color-gray-850": "#050505",
+          "--color-gray-900": "#000000",
+          "--color-gray-950": "#000000"
+        }
+      },
+
+      "rosepine": {
+        "name": "Rose Pine Theme",
+        "description": "Warm, natural theme inspired by the wilderness",
+        "background": {
+          "base": "#1f1d2e",
+          "navigation": "#191724",
+          "card": "#26233a",
+          "input": "#393552"
+        },
+        "text": {
+          "primary": "#e0def4",
+          "muted": "#6e6a86"
+        },
+        "accent": {
+          "primary": "#c4a7e7",
+          "secondary": "#9ccfd8",
+          "tertiary": "#eb6f92"
+        }
+      },
+
+      "rosepineDawn": {
+        "name": "Rose Pine Dawn Theme",
+        "description": "Light variant of Rose Pine",
+        "background": {
+          "base": "#faf4ed",
+          "navigation": "#fffaf3",
+          "card": "#f2e9e1"
+        },
+        "text": {
+          "primary": "#575279"
+        }
+      }
+    },
+
+    "semantic": {
+      "success": {
+        "light": {
+          "background": "rgba(34, 197, 94, 0.2)",
+          "text": "#15803d",
+          "border": "#22c55e"
+        },
+        "dark": {
+          "background": "rgba(34, 197, 94, 0.2)",
+          "text": "#86efac",
+          "border": "#22c55e"
+        },
+        "tailwind": "bg-green-500/20 text-green-700 dark:text-green-200"
+      },
+      "warning": {
+        "light": {
+          "background": "rgba(234, 179, 8, 0.2)",
+          "text": "#a16207",
+          "border": "#eab308"
+        },
+        "dark": {
+          "background": "rgba(234, 179, 8, 0.2)",
+          "text": "#fef08a",
+          "border": "#eab308"
+        },
+        "tailwind": "bg-yellow-500/20 text-yellow-700 dark:text-yellow-200"
+      },
+      "error": {
+        "light": {
+          "background": "rgba(239, 68, 68, 0.2)",
+          "text": "#b91c1c",
+          "border": "#ef4444"
+        },
+        "dark": {
+          "background": "rgba(239, 68, 68, 0.2)",
+          "text": "#fca5a5",
+          "border": "#ef4444"
+        },
+        "tailwind": "bg-red-500/20 text-red-700 dark:text-red-200"
+      },
+      "info": {
+        "light": {
+          "background": "rgba(59, 130, 246, 0.2)",
+          "text": "#1d4ed8",
+          "border": "#3b82f6"
+        },
+        "dark": {
+          "background": "rgba(59, 130, 246, 0.2)",
+          "text": "#93c5fd",
+          "border": "#3b82f6"
+        },
+        "tailwind": "bg-blue-500/20 text-blue-700 dark:text-blue-200"
+      },
+      "muted": {
+        "tailwind": "bg-gray-500/20 text-gray-700 dark:text-gray-200"
+      }
+    },
+
+    "interactive": {
+      "primary": {
+        "light": "#2563eb",
+        "dark": "#3b82f6"
+      },
+      "switch": {
+        "active": {
+          "light": "#10b981",
+          "dark": "#047857"
+        },
+        "inactive": {
+          "light": "#e5e7eb",
+          "dark": "transparent"
+        }
+      },
+      "focus": {
+        "ring": "#3b82f6",
+        "ringWidth": "2px"
+      }
+    }
+  },
+
+  // ============================================================================
+  // TYPOGRAPHY
+  // ============================================================================
+  "typography": {
+    "fontFamilies": {
+      "sans": {
+        "value": "-apple-system, BlinkMacSystemFont, 'Inter', 'Vazirmatn', ui-sans-serif, system-ui, 'Segoe UI', Roboto, Ubuntu, Cantarell, 'Noto Sans', sans-serif, 'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'",
+        "description": "Primary font stack with fallbacks",
+        "customFonts": ["Inter (Variable)", "Vazirmatn (Variable)"]
+      },
+      "primary": {
+        "value": "Archivo",
+        "class": ".font-primary",
+        "type": "Variable font"
+      },
+      "secondary": {
+        "value": "InstrumentSerif",
+        "class": ".font-secondary",
+        "type": "Serif font for emphasis"
+      },
+      "mono": {
+        "value": "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+        "description": "Code and technical content"
+      }
+    },
+
+    "fontSizes": {
+      "xs": {
+        "value": "0.75rem",
+        "px": "12px",
+        "lineHeight": "1rem",
+        "usage": "Small labels, metadata, badges"
+      },
+      "sm": {
+        "value": "0.875rem",
+        "px": "14px",
+        "lineHeight": "1.25rem",
+        "usage": "Body text, inputs, buttons (most common)"
+      },
+      "base": {
+        "value": "1rem",
+        "px": "16px",
+        "lineHeight": "1.5rem",
+        "usage": "Default body text"
+      },
+      "lg": {
+        "value": "1.125rem",
+        "px": "18px",
+        "lineHeight": "1.75rem",
+        "usage": "Headings, selectors, emphasis"
+      },
+      "xl": {
+        "value": "1.25rem",
+        "px": "20px",
+        "lineHeight": "1.75rem",
+        "usage": "Page titles, modal headers"
+      },
+      "2xl": {
+        "value": "1.5rem",
+        "px": "24px",
+        "lineHeight": "2rem",
+        "usage": "Major headings"
+      },
+      "3xl": {
+        "value": "1.875rem",
+        "px": "30px",
+        "lineHeight": "2.25rem",
+        "usage": "Hero text"
+      }
+    },
+
+    "fontWeights": {
+      "normal": {
+        "value": "400",
+        "usage": "Default body text"
+      },
+      "medium": {
+        "value": "500",
+        "usage": "Buttons, labels, emphasis (most common for UI)"
+      },
+      "semibold": {
+        "value": "600",
+        "usage": "Headings in prose"
+      },
+      "bold": {
+        "value": "700",
+        "usage": "Strong emphasis"
+      }
+    },
+
+    "lineHeights": {
+      "none": "1",
+      "tight": "1.25",
+      "snug": "1.375",
+      "normal": "1.5",
+      "relaxed": "1.625",
+      "loose": "2"
+    },
+
+    "textScaling": {
+      "cssVariable": "--app-text-scale",
+      "default": "1",
+      "implementation": "font-size: calc(1rem * var(--app-text-scale, 1))"
+    }
+  },
+
+  // ============================================================================
+  // SPACING & SIZING
+  // ============================================================================
+  "spacing": {
+    "scale": {
+      "0": "0",
+      "0.5": { "value": "0.125rem", "px": "2px" },
+      "1": { "value": "0.25rem", "px": "4px" },
+      "1.5": { "value": "0.375rem", "px": "6px" },
+      "2": { "value": "0.5rem", "px": "8px" },
+      "2.5": { "value": "0.625rem", "px": "10px" },
+      "3": { "value": "0.75rem", "px": "12px" },
+      "3.5": { "value": "0.875rem", "px": "14px" },
+      "4": { "value": "1rem", "px": "16px" },
+      "4.5": { "value": "1.125rem", "px": "18px" },
+      "5": { "value": "1.25rem", "px": "20px" },
+      "6": { "value": "1.5rem", "px": "24px" },
+      "8": { "value": "2rem", "px": "32px" },
+      "10": { "value": "2.5rem", "px": "40px" },
+      "12": { "value": "3rem", "px": "48px" },
+      "16": { "value": "4rem", "px": "64px" }
+    },
+    "commonPatterns": {
+      "buttonPadding": {
+        "sm": "px-2.5 py-1.5",
+        "md": "px-3.5 py-2",
+        "lg": "px-4 py-2.5"
+      },
+      "cardPadding": "p-4",
+      "modalPadding": "p-6",
+      "inputPadding": "px-3.5 py-2",
+      "sectionGap": "gap-2",
+      "listGap": "gap-1.5"
+    },
+    "safeArea": {
+      "bottom": "env(safe-area-inset-bottom)",
+      "class": "pb-safe-bottom"
+    }
+  },
+
+  // ============================================================================
+  // BORDER RADIUS
+  // ============================================================================
+  "borderRadius": {
+    "none": { "value": "0", "usage": "Sharp corners" },
+    "sm": { "value": "0.125rem", "px": "2px", "usage": "Badges, small elements" },
+    "DEFAULT": { "value": "0.25rem", "px": "4px", "usage": "Standard, checkboxes" },
+    "md": { "value": "0.375rem", "px": "6px", "usage": "Inline code" },
+    "lg": { "value": "0.5rem", "px": "8px", "usage": "Buttons, inputs, cards (most common)" },
+    "xl": { "value": "0.75rem", "px": "12px", "usage": "Large cards, dropdowns" },
+    "2xl": { "value": "1rem", "px": "16px", "usage": "File items, major containers" },
+    "3xl": { "value": "1.5rem", "px": "24px", "usage": "Emoji picker" },
+    "4xl": { "value": "2rem", "px": "32px", "usage": "Modal containers" },
+    "full": { "value": "9999px", "usage": "Circular buttons, avatars, switches" }
+  },
+
+  // ============================================================================
+  // COMPONENTS
+  // ============================================================================
+  "components": {
+    "Button": {
+      "sizes": {
+        "sm": {
+          "height": "auto",
+          "padding": "px-2.5 py-1.5",
+          "fontSize": "text-sm",
+          "description": "Compact buttons for toolbars"
+        },
+        "md": {
+          "height": "auto",
+          "padding": "px-3.5 py-2",
+          "fontSize": "text-sm",
+          "description": "Standard button size (default)"
+        },
+        "lg": {
+          "height": "auto",
+          "padding": "px-4 py-2.5",
+          "fontSize": "text-base",
+          "description": "Prominent CTAs"
+        }
+      },
+      "variants": {
+        "primary": {
+          "base": "bg-blue-600 text-white",
+          "hover": "hover:bg-blue-700",
+          "active": "active:bg-blue-800",
+          "disabled": "disabled:opacity-50 disabled:cursor-not-allowed",
+          "focus": "focus:ring-2 focus:ring-blue-500"
+        },
+        "secondary": {
+          "base": "bg-gray-200 dark:bg-gray-800 text-gray-900 dark:text-gray-100",
+          "hover": "hover:bg-gray-300 dark:hover:bg-gray-700"
+        },
+        "ghost": {
+          "base": "bg-transparent",
+          "hover": "hover:bg-gray-50 dark:hover:bg-gray-850"
+        }
+      },
+      "baseStyles": {
+        "borderRadius": "rounded-lg",
+        "fontWeight": "font-medium",
+        "transition": "transition",
+        "outline": "outline-hidden"
+      }
+    },
+
+    "Input": {
+      "base": {
+        "width": "w-full",
+        "padding": "px-3.5 py-2",
+        "fontSize": "text-sm",
+        "borderRadius": "rounded-lg",
+        "background": "bg-gray-50 dark:bg-gray-850",
+        "text": "text-gray-900 dark:text-gray-300",
+        "placeholder": "placeholder-gray-400 dark:placeholder-gray-300",
+        "border": "border border-gray-200 dark:border-gray-600",
+        "focus": "focus:ring-2 focus:ring-blue-500 focus:border-transparent",
+        "outline": "outline-hidden"
+      },
+      "variants": {
+        "error": {
+          "border": "border-red-500",
+          "focus": "focus:ring-red-500"
+        },
+        "disabled": {
+          "opacity": "opacity-50",
+          "cursor": "cursor-not-allowed"
+        }
+      }
+    },
+
+    "Textarea": {
+      "base": {
+        "width": "w-full",
+        "padding": "px-3.5 py-2",
+        "fontSize": "text-sm",
+        "borderRadius": "rounded-lg",
+        "background": "bg-gray-50 dark:bg-gray-850",
+        "text": "dark:text-gray-300",
+        "outline": "outline-hidden",
+        "resize": "resize-none"
+      },
+      "features": {
+        "autoResize": true,
+        "cssProperty": "field-sizing: content"
+      }
+    },
+
+    "Modal": {
+      "sizes": {
+        "xs": "16rem (256px)",
+        "sm": "30rem (480px)",
+        "md": "42rem (672px) - Default",
+        "lg": "56rem (896px)",
+        "xl": "70rem (1120px)",
+        "2xl": "84rem (1344px)",
+        "3xl": "100rem (1600px)",
+        "full": "100%"
+      },
+      "styling": {
+        "background": "bg-white/95 dark:bg-gray-900/95",
+        "backdrop": "backdrop-blur-sm",
+        "border": "border border-white dark:border-gray-850",
+        "shadow": "shadow-3xl",
+        "borderRadius": "rounded-4xl",
+        "overlay": "bg-black/30 dark:bg-black/60",
+        "zIndex": "z-9999"
+      },
+      "animation": {
+        "name": "flyAndScale",
+        "duration": "200ms",
+        "yOffset": "-8px",
+        "startScale": "0.95",
+        "easing": "cubicOut"
+      }
+    },
+
+    "Card": {
+      "base": {
+        "background": "bg-white dark:bg-gray-900",
+        "border": "border border-gray-200 dark:border-gray-850",
+        "borderRadius": "rounded-xl",
+        "padding": "p-4",
+        "shadow": "shadow-sm"
+      },
+      "elevated": {
+        "background": "bg-gray-50 dark:bg-gray-850",
+        "shadow": "shadow-lg"
+      }
+    },
+
+    "Badge": {
+      "base": {
+        "fontSize": "text-xs",
+        "fontWeight": "font-semibold",
+        "padding": "px-2",
+        "borderRadius": "rounded-sm",
+        "textTransform": "uppercase",
+        "lineClamp": "line-clamp-1"
+      },
+      "variants": {
+        "info": "bg-blue-500/20 text-blue-700 dark:text-blue-200",
+        "success": "bg-green-500/20 text-green-700 dark:text-green-200",
+        "warning": "bg-yellow-500/20 text-yellow-700 dark:text-yellow-200",
+        "error": "bg-red-500/20 text-red-700 dark:text-red-200",
+        "muted": "bg-gray-500/20 text-gray-700 dark:text-gray-200"
+      }
+    },
+
+    "Switch": {
+      "dimensions": {
+        "trackHeight": "h-[1.125rem] (18px)",
+        "trackWidth": "w-8 (32px)",
+        "thumbSize": "size-3 (12px)",
+        "borderRadius": "rounded-full"
+      },
+      "states": {
+        "unchecked": {
+          "track": "bg-gray-200 dark:bg-transparent",
+          "outline": "outline-1 outline-gray-100 dark:outline-gray-800"
+        },
+        "checked": {
+          "track": "bg-emerald-500 dark:bg-emerald-700",
+          "thumb": "translate-x-3"
+        },
+        "highContrast": {
+          "outline": "outline-2 outline-gray-800 dark:outline-gray-200"
+        }
+      }
+    },
+
+    "Checkbox": {
+      "dimensions": {
+        "size": "w-3.5 h-3.5 (14px)",
+        "borderRadius": "rounded-sm"
+      },
+      "states": {
+        "unchecked": {
+          "outline": "outline-1.5 outline-gray-200 dark:outline-gray-600"
+        },
+        "checked": {
+          "background": "bg-black",
+          "outline": "outline-black"
+        },
+        "hover": {
+          "outline": "hover:outline-gray-500",
+          "background": "hover:bg-gray-50 dark:hover:bg-gray-800"
+        }
+      }
+    },
+
+    "Dropdown": {
+      "styling": {
+        "background": "bg-gray-850",
+        "border": "border border-gray-900",
+        "borderRadius": "rounded-lg",
+        "padding": "p-1",
+        "maxWidth": "max-w-[130px]",
+        "zIndex": "z-50"
+      },
+      "menuItems": {
+        "padding": "px-3 py-2",
+        "fontSize": "text-sm",
+        "fontWeight": "font-medium",
+        "hover": "hover:bg-gray-800"
+      }
+    },
+
+    "Pagination": {
+      "button": {
+        "size": "size-8 (32px)",
+        "borderRadius": "rounded-[9px]",
+        "fontSize": "text-sm",
+        "fontWeight": "font-medium",
+        "background": "bg-transparent",
+        "hover": "hover:bg-gray-50 dark:hover:bg-gray-850",
+        "active": "active:scale-98",
+        "selected": "data-selected:bg-gray-50 dark:data-selected:bg-gray-850"
+      },
+      "spacing": {
+        "gap": "gap-2.5",
+        "prevNextMargin": "mr-[25px] / ml-[25px]"
+      }
+    },
+
+    "Spinner": {
+      "defaultSize": "size-4 (16px)",
+      "animation": {
+        "name": "spinner_AtaB",
+        "duration": "0.75s",
+        "timing": "linear infinite",
+        "transform": "rotate(360deg)"
+      }
+    }
+  },
+
+  // ============================================================================
+  // LAYOUT
+  // ============================================================================
+  "layout": {
+    "header": {
+      "height": {
+        "mobile": "auto",
+        "desktop": "auto"
+      },
+      "structure": "Flexible header with navigation, logo, and user menu",
+      "zIndex": "z-30"
+    },
+    "sidebar": {
+      "width": {
+        "collapsed": "w-16",
+        "expanded": "w-64"
+      },
+      "behavior": "Hidden on mobile (< 768px), visible on desktop, toggle on hamburger menu",
+      "shadow": "shadow-xl",
+      "zIndex": "z-30"
+    },
+    "mainContent": {
+      "maxWidth": "Varies by page, no fixed constraint",
+      "padding": {
+        "mobile": "p-4",
+        "tablet": "p-6",
+        "desktop": "p-8"
+      }
+    },
+    "zIndexScale": {
+      "base": "z-0",
+      "dropdown": "z-10",
+      "overlay": "z-20",
+      "header": "z-30",
+      "sidebar": "z-30",
+      "popup": "z-50",
+      "modal": "z-9999"
+    },
+    "grid": {
+      "containerQueries": true,
+      "flexPatterns": [
+        "flex justify-center items-center - Centered content",
+        "flex flex-col - Vertical stacking",
+        "flex gap-{size} - Spacing between items",
+        "flex-1 - Flex grow"
+      ]
+    }
+  },
+
+  // ============================================================================
+  // PAGES
+  // ============================================================================
+  "pages": {
+    "login": {
+      "layout": "centered",
+      "cardWidth": "max-w-md",
+      "components": ["Card", "Input", "Button"],
+      "structure": {
+        "wrapper": "flex justify-center items-center min-h-screen",
+        "card": "w-full max-w-md p-6 rounded-xl",
+        "form": "flex flex-col gap-4"
+      },
+      "mobileAdaptations": "Reduces padding, card width adjusts to viewport"
+    },
+    "chat": {
+      "layout": "sidebar + main",
+      "components": ["Sidebar", "ChatMessages", "ChatInput"],
+      "structure": {
+        "container": "flex h-screen",
+        "sidebar": "hidden md:flex md:w-64",
+        "main": "flex-1 flex flex-col"
+      },
+      "mobileAdaptations": "Sidebar hidden, hamburger menu overlay, full-width chat"
+    },
+    "admin": {
+      "layout": "sidebar + main with tabs",
+      "components": ["Sidebar", "Tabs", "DataTable", "Forms"],
+      "mobileAdaptations": "Stacked layout, collapsible sections"
+    }
+  },
+
+  // ============================================================================
+  // ANIMATIONS & TRANSITIONS
+  // ============================================================================
+  "animations": {
+    "transitions": {
+      "default": {
+        "duration": "150ms",
+        "property": "all",
+        "class": "transition"
+      },
+      "fast": {
+        "duration": "100ms"
+      },
+      "slow": {
+        "duration": "300ms"
+      }
+    },
+    "easing": {
+      "default": "ease",
+      "in": "ease-in",
+      "out": "ease-out",
+      "inOut": "ease-in-out",
+      "cubicOut": "cubic-bezier(0.33, 1, 0.68, 1)"
+    },
+    "customAnimations": {
+      "flyAndScale": {
+        "description": "Modal entrance animation",
+        "duration": "200ms",
+        "yOffset": "-8px",
+        "startScale": "0.95",
+        "easing": "cubicOut"
+      },
+      "shimmer": {
+        "description": "Loading state animation",
+        "keyframes": "background-position: 200% 0 → -200% 0",
+        "duration": "4s",
+        "timing": "linear infinite"
+      },
+      "smoothFadeIn": {
+        "description": "Status description fade in",
+        "keyframes": "opacity 0 → 1, translateY(-10px) → 0",
+        "duration": "0.2s",
+        "fill": "forwards"
+      },
+      "scaleUp": {
+        "description": "Modal content scale up",
+        "keyframes": "scale(0.985) opacity 0 → scale(1) opacity 1",
+        "duration": "0.1s",
+        "easing": "ease-out"
+      }
+    }
+  },
+
+  // ============================================================================
+  // EFFECTS
+  // ============================================================================
+  "effects": {
+    "shadows": {
+      "sm": "shadow-sm - Subtle elevation",
+      "DEFAULT": "shadow - Standard cards",
+      "md": "shadow-md - Raised elements",
+      "lg": "shadow-lg - Dropdowns, popovers",
+      "xl": "shadow-xl - Sidebars",
+      "3xl": "shadow-3xl - Modals (custom)"
+    },
+    "blur": {
+      "sm": "backdrop-blur-sm - Modals, overlays",
+      "md": "backdrop-blur",
+      "xl": "backdrop-blur-xl - Banners"
+    },
+    "opacity": {
+      "patterns": [
+        "/20 - 20% opacity (badges, backgrounds)",
+        "/30 - 30% opacity (overlays)",
+        "/50 - 50% opacity (disabled states)",
+        "/60 - 60% opacity (dark overlays)",
+        "/95 - 95% opacity (modal backgrounds)"
+      ]
+    },
+    "scrollbar": {
+      "dimensions": {
+        "height": "0.45rem (7.2px)",
+        "width": "0.45rem (7.2px)"
+      },
+      "borderRadius": "9999px",
+      "light": {
+        "thumb": "rgba(215, 215, 215, 0.6)",
+        "border": "rgba(255, 255, 255, 1)"
+      },
+      "dark": {
+        "thumb": "rgba(67, 67, 67, 0.6)",
+        "border": "rgba(0, 0, 0, 1)"
+      },
+      "utilities": {
+        "hidden": ".scrollbar-hidden - Shows on hover/focus/active",
+        "none": ".scrollbar-none - Completely hidden"
+      }
+    }
+  },
+
+  // ============================================================================
+  // TOUCH TARGETS & ACCESSIBILITY
+  // ============================================================================
+  "touchTargets": {
+    "minimum": {
+      "width": "44px",
+      "height": "44px",
+      "description": "WCAG 2.1 AAA minimum touch target size"
+    },
+    "recommended": {
+      "width": "48px",
+      "height": "48px",
+      "description": "iOS/Android recommended size"
+    },
+    "implementation": "Most buttons use py-2 px-3.5 which typically exceeds 44px"
+  },
+
+  "accessibility": {
+    "focus": {
+      "ring": "focus:ring-2",
+      "ringColor": "focus:ring-blue-500",
+      "outline": "focus:outline-none or outline-hidden"
+    },
+    "aria": {
+      "modals": "aria-modal=\"true\" role=\"dialog\"",
+      "labels": "aria-label for icon buttons",
+      "descriptions": "aria-describedby for form hints"
+    },
+    "screenReader": {
+      "class": ".sr-only",
+      "usage": "Screen reader only text"
+    },
+    "highContrast": {
+      "enabled": true,
+      "description": "Optional high contrast mode with enhanced borders and text"
+    },
+    "keyboard": {
+      "focusTrap": "Modals trap focus using focus-trap library",
+      "escape": "ESC key closes modals",
+      "tabOrder": "Logical tab order maintained"
+    }
+  },
+
+  // ============================================================================
+  // RESPONSIVE PATTERNS
+  // ============================================================================
+  "responsivePatterns": {
+    "hiddenOnMobile": {
+      "class": "hidden md:flex",
+      "description": "Hide on mobile (< 768px), show on desktop"
+    },
+    "mobileOnly": {
+      "class": "flex md:hidden",
+      "description": "Show on mobile only"
+    },
+    "responsiveFlex": {
+      "class": "flex flex-col md:flex-row",
+      "description": "Stack on mobile, row on desktop"
+    },
+    "responsiveSpacing": {
+      "class": "gap-1 md:gap-2",
+      "description": "Smaller gaps on mobile"
+    },
+    "responsiveText": {
+      "class": "text-sm md:text-base",
+      "description": "Smaller text on mobile"
+    },
+    "responsivePadding": {
+      "class": "p-4 md:p-6 lg:p-8",
+      "description": "Increase padding at larger breakpoints"
+    }
+  },
+
+  // ============================================================================
+  // SPECIAL FEATURES
+  // ============================================================================
+  "specialFeatures": {
+    "prose": {
+      "description": "Markdown rendering with typography styles",
+      "variants": [
+        ".markdown-prose - Standard markdown",
+        ".markdown-prose-sm - Small text (text-sm)",
+        ".markdown-prose-xs - Extra small (text-xs)",
+        ".input-prose - For editor inputs",
+        ".input-prose-sm - Small editor inputs"
+      ]
+    },
+    "codeHighlighting": {
+      "library": "highlight.js",
+      "inlineCode": ".codespan utility class",
+      "codeBlocks": "rounded-lg with syntax highlighting"
+    },
+    "customUtilities": {
+      "password": "WebKit text security for password fields",
+      "dragRegion": "Electron app drag region",
+      "shimmer": "Loading animation utility"
+    }
+  },
+
+  // ============================================================================
+  // IMPLEMENTATION NOTES
+  // ============================================================================
+  "implementationNotes": {
+    "cssFramework": "Tailwind CSS 4.0.0",
+    "componentLibrary": "bits-ui 0.21.15 (headless Svelte components)",
+    "stateManagement": "Svelte 5 runes and stores",
+    "darkModeImplementation": "Class-based dark mode with localStorage persistence",
+    "themeSystem": "CSS variables for dynamic theming",
+    "keyPatterns": [
+      "Mobile-first approach using md: breakpoint (768px) as primary split",
+      "CSS variables for all gray shades enable dynamic theme switching",
+      "13-shade gray scale provides nuanced dark/light theme support",
+      "Extended Tailwind spacing with 850 shade for elevated surfaces",
+      "Component-based architecture with consistent sizing/spacing patterns",
+      "Extensive use of opacity modifiers (/20, /50, /95) for subtle effects",
+      "Focus on touch-friendly targets (minimum 44px height for interactive elements)",
+      "Smooth transitions and animations throughout (150-300ms range)",
+      "ARIA support and keyboard navigation built into components",
+      "Responsive typography using dynamic CSS variables",
+      "Safe area insets for mobile notches/home indicators",
+      "Custom animations for modal entrances and loading states",
+      "Scrollbar styling for both light and dark themes",
+      "Prose utilities for rich markdown content rendering",
+      "Flexible z-index scale for proper layering"
+    ],
+    "criticalDifferences": {
+      "mobile": [
+        "Sidebar completely hidden on < 768px",
+        "Reduced padding and spacing",
+        "Smaller font sizes in some contexts",
+        "Touch-optimized button sizes",
+        "Bottom safe area padding for iOS"
+      ],
+      "desktop": [
+        "Persistent sidebar navigation",
+        "Larger modal sizes",
+        "More generous spacing",
+        "Hover states enabled"
+      ]
+    },
+    "recommendationsForTrollama": {
+      "adopt": [
+        "13-shade gray system with CSS variables",
+        "Mobile-first breakpoint strategy (md: 768px)",
+        "Component sizing patterns (sm/md/lg variants)",
+        "Touch target minimum sizes (44px)",
+        "Modal animation patterns (flyAndScale)",
+        "Scrollbar custom styling",
+        "Dark mode implementation with class toggle",
+        "ARIA and accessibility patterns"
+      ],
+      "consider": [
+        "Multiple theme support beyond light/dark (Rose Pine variants)",
+        "Dynamic text scaling with CSS variables",
+        "Prose utilities for markdown rendering",
+        "Container queries for responsive components",
+        "Focus trap for modals",
+        "Safe area insets for mobile"
+      ],
+      "customize": [
+        "Brand colors to match Trollama identity",
+        "Font stack to preferred typefaces",
+        "Animation timings to desired feel",
+        "Specific component variants as needed"
+      ]
+    }
+  }
+}

@@ -16,23 +16,23 @@ class ContextManager:
         """
         self.storage = storage
 
-    async def get_thread_context(
+    async def get_conversation_context(
         self,
-        thread_id: str,
+        conversation_id: str,
         user_id: str
     ) -> List[Dict]:
         """
-        Get conversation context for a thread.
+        Get conversation context.
         Returns messages formatted for LLM consumption.
 
         Args:
-            thread_id: Unique identifier for the conversation thread
+            conversation_id: Unique identifier for the conversation
             user_id: User ID for authorization (currently unused)
 
         Returns:
             List of message dictionaries with role, content, token_count, etc.
         """
-        messages = await self.storage.get_thread_messages(thread_id)
+        messages = await self.storage.get_conversation_messages(conversation_id)
 
         # Format for LLM
         context = []

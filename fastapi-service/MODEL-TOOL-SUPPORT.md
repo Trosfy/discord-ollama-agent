@@ -6,15 +6,16 @@ Not all LLM models support tool/function calling. This document tracks which mod
 
 ## Tool Support by Model
 
-| Model | Tools Supported | Route | Notes |
-|-------|----------------|-------|-------|
-| **gpt-oss:20b** | ✅ Yes | SELF_HANDLE, REASONING, ROUTER | Supports web_search, fetch_webpage |
-| **qwen2.5-coder:7b** | ✅ Yes | SIMPLE_CODE | Supports tools for coding tasks |
-| **deepseek-r1:8b** | ❌ No | - (Not currently used) | Pure reasoning model, no tool support |
-| **deepseek-r1:14b** | ❌ No | - | Pure reasoning model, no tool support |
-| **deepseek-r1:32b** | ❌ No | - | Pure reasoning model, no tool support |
+| Model | Tools Supported | Route | Backend | Notes |
+|-------|----------------|-------|---------|-------|
+| **gpt-oss:20b** | ✅ Yes | SELF_HANDLE, REASONING, ROUTER | Ollama | Supports web_search, fetch_webpage |
+| **gpt-oss-120b-eagle3** | ✅ Yes | COMPLEX_CODE, REASONING, RESEARCH | SGLang | Eagle3 speculative decoding (1.6-1.8× speedup). Supports web_search, fetch_webpage via OpenAI-compatible API. 128GB systems only. |
+| **qwen2.5-coder:7b** | ✅ Yes | SIMPLE_CODE | Ollama | Supports tools for coding tasks |
+| **deepseek-r1:8b** | ❌ No | - (Not currently used) | Ollama | Pure reasoning model, no tool support |
+| **deepseek-r1:14b** | ❌ No | - | Ollama | Pure reasoning model, no tool support |
+| **deepseek-r1:32b** | ❌ No | - | Ollama | Pure reasoning model, no tool support |
 
-**Note**: All currently active routes (SELF_HANDLE, SIMPLE_CODE, REASONING) use models that support tools. The conditional tool provision logic remains in place for future flexibility.
+**Note**: All currently active routes (SELF_HANDLE, SIMPLE_CODE, REASONING, RESEARCH, COMPLEX_CODE) use models that support tools. The conditional tool provision logic remains in place for future flexibility.
 
 ## Implementation
 

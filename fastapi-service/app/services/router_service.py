@@ -111,16 +111,23 @@ class RouterService:
             logger.warning(f"⚠️  LLM rephrasing failed: {e}, using original message")
             return user_message  # Graceful fallback
 
-    async def classify_request(self, user_message: str, file_refs: list = []) -> dict:
+    async def classify_request(
+        self,
+        user_message: str,
+        file_refs: list = [],
+        artifact_detection_model: str = None
+    ) -> dict:
         """
         Classify user request and detect preprocessing/postprocessing needs.
 
         Uses LLM-based classification with prompts loaded from JSON config.
-        The Router handles classification logic using gpt-oss:20b.
+        The Router handles classification logic using settings.ROUTER_MODEL.
 
         Args:
             user_message: User's input message
             file_refs: List of uploaded file references (default: [])
+            artifact_detection_model: Model for artifact detection (from profile).
+                                      If None, falls back to settings.ROUTER_MODEL.
 
         Returns:
             Dict with route, preprocessing, postprocessing, model, mode, filtered_prompt
@@ -128,7 +135,7 @@ class RouterService:
         Raises:
             Exception: If classification fails
         """
-        # Step 1: Route using LLM-based Router
+        # Step 1: Route using LLM-based Router (always uses settings.ROUTER_MODEL)
         context = {'file_refs': file_refs}
         route_handler = await self.router.route(user_message, context)
 
@@ -142,7 +149,11 @@ class RouterService:
             input_artifact = self.input_detector.detect(file_refs)
 
         if self.output_detector:
-            output_artifact = await self.output_detector.detect(user_message)
+            # Use profile-specific model for artifact detection
+            output_artifact = await self.output_detector.detect(
+                user_message,
+                model=artifact_detection_model
+            )
 
         # Step 3: Build preprocessing/postprocessing lists
         preprocessing = ['INPUT_ARTIFACT'] if input_artifact else []

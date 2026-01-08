@@ -1,0 +1,48 @@
+{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@/components/*": ["./src/presentation/components/*", "./components/*"],
+      "@/components/ui/*": ["./src/presentation/components/ui/*"],
+      "@/components/admin/*": ["./src/presentation/components/admin/*", "./components/admin/*"],
+      "@/components/layout/*": ["./src/presentation/components/layout/*"],
+      "@/hooks/*": ["./src/presentation/hooks/*"],
+      "@/hooks": ["./src/presentation/hooks/index.ts"],
+      "@/contexts/*": ["./src/presentation/contexts/*"],
+      "@/stores/*": ["./src/presentation/stores/*"],
+      "@/stores": ["./src/presentation/stores/index.ts"],
+      "@/lib/*": ["./src/presentation/lib/*"],
+      "@/domain/*": ["./src/domain/*"],
+      "@/application/*": ["./src/application/*"],
+      "@/infrastructure/*": ["./src/infrastructure/*"],
+      "@/config/*": ["./src/config/*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.mts"
+  ],
+  "exclude": ["node_modules"]
+}

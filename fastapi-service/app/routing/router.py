@@ -13,6 +13,7 @@ from typing import Dict, Any, TYPE_CHECKING
 
 from strands import Agent
 from strands.models.ollama import OllamaModel
+from strands.models.openai import OpenAIModel
 
 from app.routing.route import (
     MathRoute,
@@ -48,18 +49,18 @@ class Router:
         self,
         prompt_composer: 'PromptComposer',
         ollama_host: str,
-        router_model_id: str
+        router_model_id: str  # Initial model, may change with profile switches
     ):
         """Initialize Router with LLM configuration.
 
         Args:
             prompt_composer: PromptComposer instance for loading prompts from JSON
             ollama_host: Ollama API host (from settings.OLLAMA_HOST)
-            router_model_id: Model ID for classification (from settings.ROUTER_MODEL)
+            router_model_id: Initial model ID (router will read dynamically from settings)
         """
         self.prompt_composer = prompt_composer
         self.ollama_host = ollama_host
-        self.router_model_id = router_model_id
+        # Don't cache router_model_id - read dynamically from settings.ROUTER_MODEL
 
         # Load classification prompt from JSON config
         self.classification_prompt = self.prompt_composer.get_classification_prompt()
@@ -75,7 +76,7 @@ class Router:
         }
         self.fallback_route = ReasoningRoute()  # Most capable fallback
 
-        logger.info(f"✅ Router initialized with LLM classification (model: {router_model_id})")
+        logger.info(f"✅ Router initialized with LLM classification (initial model: {router_model_id})")
 
     async def route(self, user_message: str, context: Dict[str, Any] = None) -> RouteHandler:
         """Use LLM to classify request and return appropriate RouteHandler.
@@ -96,13 +97,36 @@ class Router:
         try:
             logger.info(f"🔀 Classifying request: {user_message[:100]}...")
 
-            # Create Ollama model via Strands (config from settings)
-            router_model = OllamaModel(
-                host=self.ollama_host,  # From settings.OLLAMA_HOST
-                model_id=self.router_model_id,  # From settings.ROUTER_MODEL
-                temperature=0.1,  # Low for deterministic classification
-                keep_alive="120s"  # Smart router reuse for SELF_HANDLE
-            )
+            # Read router model dynamically from active profile (supports profile switching)
+            # IMPORTANT: Always use settings.ROUTER_MODEL for classification
+            # User-selected models only affect generation, not routing classification
+            from app.config import get_model_capabilities, settings
+            router_model_id = settings.ROUTER_MODEL
+            model_caps = get_model_capabilities(router_model_id)
+
+            if model_caps and model_caps.backend.type == "sglang":
+                # DEPRECATED: Eagle3 model (SGLang not in use)
+                # SGLang backend is not configured - fall through to Ollama
+                logger.warning(f"⚠️  SGLang backend requested but deprecated (model: {router_model_id})")
+                model_caps = None  # Force Ollama path below
+
+            if model_caps and model_caps.backend.type != "sglang":
+                # Ollama model - use standard Ollama API
+                router_model = OllamaModel(
+                    host=self.ollama_host,  # From settings.OLLAMA_HOST
+                    model_id=router_model_id,  # Dynamic from settings.ROUTER_MODEL
+                    temperature=0.1,  # Low for deterministic classification
+                    keep_alive="120s"  # Smart router reuse for SELF_HANDLE
+                )
+            else:
+                # Fallback to default router model (shouldn't happen with profiles)
+                logger.warning(f"⚠️  No valid backend for router model {router_model_id}, using Ollama fallback")
+                router_model = OllamaModel(
+                    host=self.ollama_host,
+                    model_id="gpt-oss:20b",  # Conservative fallback
+                    temperature=0.1,
+                    keep_alive="120s"
+                )
 
             # Create Strands Agent for classification
             loop = asyncio.get_event_loop()

@@ -16,15 +16,15 @@ logger = logging_client.setup_logger('fastapi')
 class FileService:
     """Manage temporary file storage, processing, and cleanup."""
 
-    def __init__(self, ocr_service=None):
+    def __init__(self, extraction_router=None):
         """
-        Initialize file service with optional OCR capability.
+        Initialize file service with SOLID extraction router.
 
         Args:
-            ocr_service: Optional OCRService instance for processing images
+            extraction_router: FileExtractionRouter instance for content extraction
         """
         from app.config import settings
-        self.ocr_service = ocr_service
+        self.extraction_router = extraction_router
         self.temp_upload_dir = Path(settings.TEMP_UPLOAD_DIR)
         self.temp_artifact_dir = Path(settings.TEMP_ARTIFACT_DIR)
 
@@ -32,7 +32,7 @@ class FileService:
         self.temp_upload_dir.mkdir(exist_ok=True, parents=True)
         self.temp_artifact_dir.mkdir(exist_ok=True, parents=True)
 
-        logger.info(f"✅ FileService initialized (uploads: {self.temp_upload_dir}, artifacts: {self.temp_artifact_dir})")
+        logger.info(f"✅ FileService initialized with extraction router")
         logger.info(f"   Upload directory: {self.temp_upload_dir}")
         logger.info(f"   Artifact directory: {self.temp_artifact_dir}")
 
@@ -66,23 +66,24 @@ class FileService:
 
             logger.info(f"💾 Saved temp file: {filename} ({len(file_data)} bytes) → {file_id}{ext}")
 
-            # Process file (OCR for images, direct read for text)
+            # Extract content using SOLID router (Strategy Pattern)
             extracted_content = None
             try:
-                if self.ocr_service is None:
-                    logger.warning("⚠️  OCR service not available for file processing")
-                    extracted_content = "[OCR service not available]"
+                if self.extraction_router is None:
+                    logger.warning("⚠️  Extraction router not available")
+                    extracted_content = "[Extraction router not available]"
                 else:
-                    result = await self.ocr_service.analyze_document(
+                    result = await self.extraction_router.extract_content(
                         str(storage_path),
                         content_type
                     )
                     extracted_content = result['text']
-                    logger.info(f"✅ Processed {filename}: {len(extracted_content)} chars extracted ({result['model']})")
+                    extractor = result['extractor']
+                    logger.info(f"✅ Extracted content from {filename}: {len(extracted_content)} chars ({extractor})")
 
             except Exception as e:
-                logger.error(f"❌ Failed to process file {file_id}: {e}")
-                extracted_content = "[Processing failed]"
+                logger.error(f"❌ Failed to extract content from {file_id}: {e}")
+                extracted_content = "[Extraction failed]"
 
             return {
                 'file_id': file_id,

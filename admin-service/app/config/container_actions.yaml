@@ -1,0 +1,41 @@
+# Container Action Configuration
+#
+# Defines custom start/stop scripts for specific containers.
+# If no custom config exists, falls back to default docker start/stop commands.
+#
+# Scripts are executed on the host via SSH to ensure:
+# - Proper TTY allocation
+# - Full host environment and PATH
+# - Native sudo access for system commands (swap, systemd, etc.)
+#
+# Script paths are relative to project root.
+
+containers:
+  # SGLang container - requires system-level setup before starting
+  trollama-sglang:
+    # Custom start script that handles:
+    # - Enabling swap for MoE weight shuffling
+    # - Disabling earlyoom during startup
+    # - Flushing buffer cache to maximize available memory
+    # - Starting container with docker-compose
+    # - Monitoring health check until container is ready (~5-10 minutes)
+    # - Re-enabling earlyoom and disabling swap after startup
+    start_script: "./scripts/model_management/start_sglang.sh"
+
+    # Custom stop script for graceful shutdown
+    stop_script: "./scripts/model_management/stop_sglang.sh"
+
+    # Timeout for script execution (seconds)
+    # SGLang startup includes MoE weight shuffling which takes ~5-10 minutes
+    timeout: 720  # 12 minutes
+
+    # Health check timeout (not needed - start_sglang.sh already waits for health)
+    # This is just a safety fallback in case script returns early
+    health_timeout: 60  # 1 minute fallback
+
+  # Other containers can be added here with custom scripts if needed
+  # Example:
+  # trollama-fastapi:
+  #   start_script: "./scripts/container_management/start_fastapi.sh"
+  #   stop_script: "./scripts/container_management/stop_fastapi.sh"
+  #   timeout: 60

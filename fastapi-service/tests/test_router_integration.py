@@ -28,7 +28,7 @@ class TestRouterIntegration:
             'temperature': 0.7,
             'preferred_model': 'gpt-oss:20b'
         }
-        mock_context_manager.get_thread_context.return_value = []
+        mock_context_manager.get_conversation_context.return_value = []
         mock_token_tracker.has_budget.return_value = True
         mock_token_tracker.count_tokens.return_value = 50
 
@@ -100,7 +100,7 @@ class TestRouterIntegration:
             'temperature': 0.7,
             'preferred_model': 'qwen2.5-coder:7b'
         }
-        mock_context_manager.get_thread_context.return_value = []
+        mock_context_manager.get_conversation_context.return_value = []
         mock_token_tracker.has_budget.return_value = True
         mock_token_tracker.count_tokens.return_value = 100
 
@@ -169,7 +169,7 @@ class TestRouterIntegration:
             'temperature': 0.7,
             'preferred_model': 'deepseek-r1:8b'
         }
-        mock_context_manager.get_thread_context.return_value = []
+        mock_context_manager.get_conversation_context.return_value = []
         mock_token_tracker.has_budget.return_value = True
         mock_token_tracker.count_tokens.return_value = 200
 
@@ -240,7 +240,7 @@ class TestRouterIntegration:
             'temperature': 0.7,
             'preferred_model': 'gpt-oss:20b'
         }
-        mock_context_manager.get_thread_context.return_value = []
+        mock_context_manager.get_conversation_context.return_value = []
         mock_token_tracker.has_budget.return_value = True
         mock_token_tracker.count_tokens.return_value = 50
 
@@ -408,7 +408,7 @@ class TestReferenceCapture:
             'temperature': 0.7,
             'preferred_model': 'deepseek-r1:8b'
         }
-        mock_context_manager.get_thread_context.return_value = []
+        mock_context_manager.get_conversation_context.return_value = []
         mock_token_tracker.has_budget.return_value = True
         mock_token_tracker.count_tokens.return_value = 150
 

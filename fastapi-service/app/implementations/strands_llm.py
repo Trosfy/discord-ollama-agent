@@ -18,6 +18,9 @@ from app.config import settings, get_model_capabilities
 from app.utils.model_utils import get_ollama_keep_alive
 from app.streaming import StreamProcessor, StreamFilter, StreamLogger
 from app.prompts import PromptComposer
+from app.implementations.model_factory import ModelFactory
+from app.services.vram import get_orchestrator
+from app.config import settings
 import logging_client
 
 # Initialize logger
@@ -110,6 +113,49 @@ def create_limited_fetch_wrapper(base_tool, limiter: CallLimiter, stripper: Cont
             setattr(limited_fetch_wrapper, attr, getattr(base_tool, attr))
 
     return limited_fetch_wrapper
+
+
+def create_async_limited_fetch_wrapper(base_tool, max_calls: int):
+    """
+    Create async fetch wrapper with call limiting.
+
+    Args:
+        base_tool: The async fetch_webpage tool (DecoratedFunctionTool from Strands)
+        max_calls: Maximum number of fetch calls allowed
+
+    Returns:
+        Wrapped DecoratedFunctionTool with call limiting
+    """
+    call_count = {"count": 0}  # Mutable counter for closure
+
+    # Import tool decorator
+    from strands import tool
+
+    # Extract spec from base tool
+    tool_name = base_tool.tool_name
+    tool_spec = base_tool.tool_spec
+
+    # Create wrapper function
+    async def limited_fetch(url: str, use_cache: bool = True, max_retries: int = 3):
+        """Limited async fetch that enforces max_calls limit."""
+        if call_count["count"] >= max_calls:
+            logger.warning(f"🚫 Fetch limit reached ({max_calls} fetches)")
+            return {
+                "error": f"Fetch limit reached ({max_calls} fetches). Please synthesize the information you already have."
+            }
+
+        call_count["count"] += 1
+        logger.info(f"📄 Fetch {call_count['count']}/{max_calls}: {url}")
+        return await base_tool(url, use_cache, max_retries)
+
+    # Re-decorate with @tool using original spec
+    # This creates a proper DecoratedFunctionTool that Strands recognizes
+    decorated = tool(
+        name=tool_name,
+        description=tool_spec.get('description', '')
+    )(limited_fetch)
+
+    return decorated
 
 
 class ReferenceCapturingHook(HookProvider):
@@ -212,20 +258,43 @@ class StrandsLLM(LLMInterface):
     def __init__(self):
         self.ollama_host = settings.OLLAMA_HOST
         self.default_model = settings.OLLAMA_DEFAULT_MODEL
-        self.keep_alive = get_ollama_keep_alive()  # Centralized keep_alive logic (SOLID/DRY)
+        self.keep_alive = get_ollama_keep_alive(self.default_model)  # Per-model keep_alive (respects priority)
 
         # Initialize Ollama model
         self.model = OllamaModel(
             host=self.ollama_host,
             model_id=self.default_model,
-            keep_alive=self.keep_alive  # Control VRAM management (0s=immediate unload, -1=never unload)
+            keep_alive=self.keep_alive  # Control VRAM management (per-model keep_alive from ModelCapabilities)
         )
 
-        # Initialize custom tools (removed create_artifact - files handled by post-processing)
-        from app.tools import web_search, fetch_webpage, list_attachments, get_file_content
+        # Initialize extension orchestrator for POST-PROCESSING only
+        # (NO ImageOCRExtension - OCR happens in preprocessing via FileExtractionRouter)
+        from app.extensions import ExtensionOrchestrator, DiscordFileExtension
+        self.extension_orchestrator = ExtensionOrchestrator([
+            DiscordFileExtension(),  # ONLY for artifact registration (post-processing)
+        ])
+        logger.info("✅ ExtensionOrchestrator initialized with Discord extension (post-processing only)")
+
+        # Initialize custom tools + Strands file tools (wrapped with extensions)
+        from app.tools import web_search, fetch_webpage, list_attachments
+        from app.tools.strands_tools_wrapped import (
+            file_read_wrapped,
+            file_write_wrapped,
+            set_orchestrator
+        )
+
+        # Set orchestrator for wrapped tools
+        set_orchestrator(self.extension_orchestrator)
+
         self.base_fetch_webpage = fetch_webpage  # Store reference for wrapper
-        self.custom_tools = [web_search, fetch_webpage, list_attachments, get_file_content]
-        logger.info("✅ Custom tools initialized (web_search, fetch_webpage, list_attachments, get_file_content)")
+        self.custom_tools = [
+            web_search,
+            fetch_webpage,
+            list_attachments,
+            file_read_wrapped,   # Strands tool + extensions (PDF, OCR, Discord)
+            file_write_wrapped,  # Strands tool + extensions (Discord artifact registration)
+        ]
+        logger.info("✅ Custom tools initialized (web_search, fetch_webpage, list_attachments, file_read, file_write)")
 
         # Initialize prompt composer (modular prompt architecture)
         self.prompt_composer = PromptComposer()
@@ -233,6 +302,9 @@ class StrandsLLM(LLMInterface):
 
         # Token counter (approximate)
         self.encoder = tiktoken.encoding_for_model("gpt-3.5-turbo")
+
+        # Request context for extensions (set per-request)
+        self.current_request_context = {}
 
         # Agent will be created per-request with specific tools/config
 
@@ -254,12 +326,10 @@ class StrandsLLM(LLMInterface):
         # Select model
         model_id = model or self.default_model
 
-        # Create model instance
-        ollama_model = OllamaModel(
-            host=self.ollama_host,
-            model_id=model_id,
-            temperature=temperature,
-            keep_alive=self.keep_alive
+        # Create model instance using ModelFactory
+        model_instance = await ModelFactory.create_model(
+            model_name=model_id,
+            temperature=temperature
         )
 
         # Build combined system prompt
@@ -272,7 +342,7 @@ class StrandsLLM(LLMInterface):
         ref_hook = ReferenceCapturingHook()
 
         # Create limited fetch wrapper with SOLID composition (max 2 calls)
-        from app.tools import web_search, list_attachments, get_file_content
+        from app.tools import web_search, list_attachments, file_read_wrapped
         limiter = CallLimiter(max_calls=2)
         stripper = ContentStripper()
         limited_fetch = create_limited_fetch_wrapper(
@@ -280,7 +350,8 @@ class StrandsLLM(LLMInterface):
             limiter=limiter,
             stripper=stripper
         )
-        agent_tools = [web_search, limited_fetch, list_attachments, get_file_content]
+        # Note: get_file_content deprecated - content is prepended to message via file_context_builder
+        agent_tools = [web_search, limited_fetch, list_attachments]
 
         # Check if model supports tools
         model_caps = get_model_capabilities(model_id)
@@ -294,7 +365,7 @@ class StrandsLLM(LLMInterface):
         try:
             # Create agent with limited tools and hook
             agent = Agent(
-                model=ollama_model,
+                model=model_instance,
                 tools=agent_tools if supports_tools else [],
                 system_prompt=system_prompt,
                 hooks=[ref_hook] if supports_tools else []
@@ -318,6 +389,14 @@ class StrandsLLM(LLMInterface):
                 'references': ref_hook.references
             }
         except Exception as e:
+            # Clean up registry on generation failure (prevents waiting for reconciliation)
+            if settings.VRAM_ENABLE_ORCHESTRATOR:
+                try:
+                    orchestrator = get_orchestrator()
+                    await orchestrator.mark_model_unloaded(model_id, crashed=True)
+                    logger.error(f"❌ Generation failed for {model_id}, cleaned up registry: {str(e)}")
+                except Exception as cleanup_error:
+                    logger.error(f"❌ Registry cleanup failed after generation error: {cleanup_error}")
             raise Exception(f"LLM generation failed: {str(e)}")
 
     async def generate_with_route(
@@ -402,12 +481,13 @@ class StrandsLLM(LLMInterface):
                 additional_args = None
 
         # Create model instance with route-specific prompt and flexible thinking parameters
-        ollama_model = OllamaModel(
-            host=self.ollama_host,
-            model_id=model,
+        # ModelFactory handles backend selection (Ollama, TensorRT-LLM, vLLM)
+        user_selected = route_config.get('user_selected_model', False)
+        model_instance = await ModelFactory.create_model(
+            model_name=model,
             temperature=temperature,
             additional_args=additional_args,
-            keep_alive=self.keep_alive
+            user_selected=user_selected
         )
 
         # Format context as prompt
@@ -416,17 +496,28 @@ class StrandsLLM(LLMInterface):
         # Create reference capturing hook
         ref_hook = ReferenceCapturingHook()
 
-        # Provide web tools directly (no wrapper to avoid Strands compatibility issues)
-        # RESEARCH route gets more sources (4-5+), others get 2-3
-        # Note: Limiting handled by model instructions in system prompt
-        fetch_limit = 5 if route == "RESEARCH" else 2
-        from app.tools import web_search, fetch_webpage, list_attachments, get_file_content
-        agent_tools = [web_search, fetch_webpage, list_attachments, get_file_content]
+        # Provide tools with profile-aware fetch limiting
+        from app.config import get_active_profile
+        profile = get_active_profile()
+        fetch_limit = profile.fetch_limits.get(route, profile.fetch_limits.get('default', 5))
+
+        from app.tools import web_search, fetch_webpage, list_attachments, file_read_wrapped
+
+        # Conditionally apply fetch limiter (-1 = no limit)
+        if fetch_limit > 0:
+            limited_fetch = create_async_limited_fetch_wrapper(fetch_webpage, max_calls=fetch_limit)
+            agent_tools = [web_search, limited_fetch, list_attachments, file_read_wrapped]
+        else:
+            # No limit, use original fetch_webpage
+            agent_tools = [web_search, fetch_webpage, list_attachments, file_read_wrapped]
 
         # Check if model supports tools
         supports_tools = model_caps and model_caps.supports_tools
         if supports_tools:
-            logger.info(f"🔧 Providing tools (web_search, fetch_webpage, list_attachments, get_file_content, target {fetch_limit} fetches) to {model}")
+            if fetch_limit > 0:
+                logger.info(f"🔧 Providing tools to {model} (max {fetch_limit} fetches enforced, profile={profile.profile_name}, route={route})")
+            else:
+                logger.info(f"🔧 Providing tools to {model} (NO FETCH LIMIT, profile={profile.profile_name}, route={route})")
         else:
             logger.info(f"⚠️  Model {model} doesn't support tools - running without tools")
             agent_tools = []
@@ -435,7 +526,7 @@ class StrandsLLM(LLMInterface):
         loop = asyncio.get_event_loop()
         try:
             agent = Agent(
-                model=ollama_model,
+                model=model_instance,
                 tools=agent_tools if supports_tools else [],
                 system_prompt=system_prompt,
                 hooks=[ref_hook] if supports_tools else []
@@ -470,6 +561,14 @@ class StrandsLLM(LLMInterface):
                 'references': ref_hook.references
             }
         except Exception as e:
+            # Clean up registry on generation failure (prevents waiting for reconciliation)
+            if settings.VRAM_ENABLE_ORCHESTRATOR:
+                try:
+                    orchestrator = get_orchestrator()
+                    await orchestrator.mark_model_unloaded(model, crashed=True)
+                    logger.error(f"❌ Generation failed for {model}, cleaned up registry: {str(e)}")
+                except Exception as cleanup_error:
+                    logger.error(f"❌ Registry cleanup failed after generation error: {cleanup_error}")
             raise Exception(f"LLM generation failed: {str(e)}")
 
     async def generate_stream(
@@ -490,21 +589,31 @@ class StrandsLLM(LLMInterface):
         system_prompt = self._build_system_prompt(user_base_prompt)
         prompt = self._format_context(context, system_prompt)
 
-        ollama_model = OllamaModel(
-            host=self.ollama_host,
-            model_id=model,
-            temperature=temperature,
-            keep_alive=self.keep_alive
+        model_instance = await ModelFactory.create_model(
+            model_name=model,
+            temperature=temperature
         )
 
-        agent = Agent(
-            model=ollama_model,
-            system_prompt=system_prompt
-        )
+        try:
+            agent = Agent(
+                model=model_instance,
+                system_prompt=system_prompt
+            )
 
-        # Use stream_async for streaming
-        async for chunk in agent.stream_async(prompt):
-            yield str(chunk)
+            # Use stream_async for streaming
+            async for chunk in agent.stream_async(prompt):
+                yield str(chunk)
+
+        except Exception as e:
+            # Clean up registry on streaming generation failure (prevents waiting for reconciliation)
+            if settings.VRAM_ENABLE_ORCHESTRATOR:
+                try:
+                    orchestrator = get_orchestrator()
+                    await orchestrator.mark_model_unloaded(model, crashed=True)
+                    logger.error(f"❌ Basic streaming generation failed for {model}, cleaned up registry: {str(e)}")
+                except Exception as cleanup_error:
+                    logger.error(f"❌ Registry cleanup failed after basic streaming error: {cleanup_error}")
+            raise Exception(f"LLM streaming generation failed: {str(e)}")
 
     async def generate_stream_with_route(
         self,
@@ -587,36 +696,52 @@ class StrandsLLM(LLMInterface):
                 additional_args = None
 
         # Create model instance with flexible thinking parameters
-        ollama_model = OllamaModel(
-            host=self.ollama_host,
-            model_id=model,
+        # ModelFactory handles backend selection (Ollama, TensorRT-LLM, vLLM)
+        user_selected = route_config.get('user_selected_model', False)
+        model_instance = await ModelFactory.create_model(
+            model_name=model,
             temperature=temperature,
             additional_args=additional_args,
-            keep_alive=self.keep_alive
+            user_selected=user_selected
         )
 
         # Format context as prompt
         prompt = self._format_context(context, system_prompt)
 
-        # Create reference capturing hook
-        ref_hook = ReferenceCapturingHook()
+        # Create reference capturing hook and store as instance variable
+        # so orchestrator can access references after streaming completes
+        self.last_ref_hook = ReferenceCapturingHook()
+        ref_hook = self.last_ref_hook
 
-        # Provide tools
-        fetch_limit = 5 if route == "RESEARCH" else 2
-        from app.tools import web_search, fetch_webpage, list_attachments, get_file_content
-        agent_tools = [web_search, fetch_webpage, list_attachments, get_file_content]
+        # Provide tools with profile-aware fetch limiting
+        from app.config import get_active_profile
+        profile = get_active_profile()
+        fetch_limit = profile.fetch_limits.get(route, profile.fetch_limits.get('default', 5))
+
+        from app.tools import web_search, fetch_webpage, list_attachments, file_read_wrapped
+
+        # Conditionally apply fetch limiter (-1 = no limit)
+        if fetch_limit > 0:
+            limited_fetch = create_async_limited_fetch_wrapper(fetch_webpage, max_calls=fetch_limit)
+            agent_tools = [web_search, limited_fetch, list_attachments, file_read_wrapped]
+        else:
+            # No limit, use original fetch_webpage
+            agent_tools = [web_search, fetch_webpage, list_attachments, file_read_wrapped]
 
         # Check if model supports tools
         supports_tools = model_caps and model_caps.supports_tools
         if supports_tools:
-            logger.info(f"🔧 Providing tools (streaming) to {model} (target {fetch_limit} fetches)")
+            if fetch_limit > 0:
+                logger.info(f"🔧 Providing tools (streaming) to {model} (max {fetch_limit} fetches enforced, profile={profile.profile_name}, route={route})")
+            else:
+                logger.info(f"🔧 Providing tools (streaming) to {model} (NO FETCH LIMIT, profile={profile.profile_name}, route={route})")
         else:
             logger.info(f"⚠️  Model {model} doesn't support tools - streaming without tools")
             agent_tools = []
 
         try:
             agent = Agent(
-                model=ollama_model,
+                model=model_instance,
                 tools=agent_tools if supports_tools else [],
                 system_prompt=system_prompt,
                 hooks=[ref_hook] if supports_tools else []
@@ -666,12 +791,54 @@ class StrandsLLM(LLMInterface):
                 logger.debug(f"🔄 Flushing final buffer: {len(final_chunk)} chars")
                 yield final_chunk
 
-            # Log final stats
+            # Log final stats and save thinking token count for TPS calculation
             stats = processor.get_stats()
-            stats.update(stream_filter.get_stats())
+            stream_stats = stream_filter.get_stats()
+            stats.update(stream_stats)
             logger.info(f"📊 Streaming complete: {stats}")
 
+            # Store thinking token count for TPS calculation in orchestrator
+            think_filter_stats = stream_stats.get('think_filter', {})
+            self.last_thinking_tokens = think_filter_stats.get('discarded_size', 0)
+            logger.debug(f"💭 Thinking tokens: {self.last_thinking_tokens}")
+
         except Exception as e:
+            # Clean up registry on streaming generation failure (prevents waiting for reconciliation)
+            if settings.VRAM_ENABLE_ORCHESTRATOR:
+                try:
+                    orchestrator = get_orchestrator()
+
+                    # NEW: Detect connection errors for circuit breaker
+                    error_msg = str(e).lower()
+                    is_connection_error = (
+                        "connection" in error_msg or
+                        "connect" in error_msg or
+                        "refused" in error_msg or
+                        "timeout" in error_msg or
+                        "unreachable" in error_msg
+                    )
+
+                    model_caps = get_model_capabilities(model)
+                    is_sglang = model_caps and model_caps.backend.type == "sglang"
+
+                    if is_connection_error and is_sglang:
+                        # Record in crash tracker to trigger circuit breaker
+                        logger.warning(
+                            f"⚠️  SGLang connection error during streaming for {model}, "
+                            f"marking as crashed for circuit breaker"
+                        )
+                        await orchestrator.mark_model_unloaded(
+                            model,
+                            crashed=True,
+                            crash_reason="sglang_connection_error"
+                        )
+                    else:
+                        # Normal crash (not connection error)
+                        await orchestrator.mark_model_unloaded(model, crashed=True)
+
+                    logger.error(f"❌ Streaming generation failed for {model}, cleaned up registry: {str(e)}")
+                except Exception as cleanup_error:
+                    logger.error(f"❌ Registry cleanup failed after streaming error: {cleanup_error}")
             raise Exception(f"LLM streaming generation failed: {str(e)}")
 
     async def count_tokens(self, text: str) -> int:
@@ -1055,17 +1222,30 @@ You're a helpful Discord assistant with web search tools. For research: web_sear
             Composed system prompt with proper layer ordering
         """
         route = route_config.get('route')
+        model = route_config.get('model')
         postprocessing = route_config.get('postprocessing', [])
 
         # Determine format context based on postprocessing
         format_context = 'file_creation' if 'OUTPUT_ARTIFACT' in postprocessing else 'standard'
+
+        # Get context window from model capabilities (for performance variants)
+        context_window = None
+        if model:
+            model_caps = get_model_capabilities(model)
+            if model_caps and hasattr(model_caps, 'context_window'):
+                context_window = model_caps.context_window
+
+        # Get source from route_config for format-aware prompting (discord vs webui)
+        source = route_config.get('source', 'discord')
 
         # Use PromptComposer for modular prompt composition
         return self.prompt_composer.compose_route_prompt(
             route=route,
             postprocessing=postprocessing,
             format_context=format_context,
-            user_base_prompt=user_base_prompt
+            user_base_prompt=user_base_prompt,
+            context_window=context_window,
+            source=source
         )
 
     def _build_self_handle_prompt(self, current_date: str) -> str:

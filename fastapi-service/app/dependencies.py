@@ -30,6 +30,8 @@ _file_service = None
 _strategy_registry = None
 _output_artifact_detector = None
 _input_artifact_detector = None
+_profile_manager = None
+_preference_resolver = None
 
 # Context variable for current request (used by tools)
 _current_request: ContextVar[dict] = ContextVar('current_request', default={})
@@ -103,6 +105,17 @@ def get_websocket_manager():
     return _ws_manager
 
 
+# Alias for shorter dependency injection
+def get_ws_manager():
+    """
+    Alias for get_websocket_manager().
+
+    Returns:
+        WebSocketManager instance
+    """
+    return get_websocket_manager()
+
+
 def get_context_manager():
     """
     Get context manager.
@@ -151,6 +164,65 @@ def get_router_service():
     return _router_service
 
 
+def get_profile_manager():
+    """
+    Get profile manager (singleton).
+
+    ProfileManager handles circuit breaker profile switching:
+    - Monitors fallback state
+    - Checks external service health (SGLang)
+    - Triggers profile switches
+    - Coordinates with circuit breaker
+
+    Returns:
+        ProfileManager instance or None if not initialized
+    """
+    global _profile_manager
+    if _profile_manager is None:
+        from app.services.profile_manager import ProfileManager
+        from app.services.vram import get_crash_tracker
+
+        # Get SGLang endpoint from settings
+        sglang_endpoint = getattr(settings, 'SGLANG_ENDPOINT', 'http://trollama-sglang:30000')
+
+        # Create ProfileManager
+        _profile_manager = ProfileManager(
+            sglang_endpoint=sglang_endpoint,
+            health_check_timeout=2.0
+        )
+
+        # Register ProfileManager as observer on CrashTracker (Observer Pattern)
+        crash_tracker = get_crash_tracker()
+        crash_tracker.add_observer(_profile_manager.on_circuit_breaker_triggered)
+
+    return _profile_manager
+
+
+def get_preference_resolver():
+    """
+    Get preference resolver (singleton).
+
+    PreferenceResolver provides unified preference handling across all interfaces:
+    - Discord /model command
+    - Web UI model selector
+    - User stored preferences
+
+    Priority: request.model > user_prefs.preferred_model > router
+
+    Returns:
+        PreferenceResolver instance
+    """
+    global _preference_resolver
+    if _preference_resolver is None:
+        from app.services.preference_resolver import PreferenceResolver
+        from app.config import get_active_profile
+
+        _preference_resolver = PreferenceResolver(
+            profile_getter=get_active_profile
+        )
+    return _preference_resolver
+
+
 def get_orchestrator():
     """
     Get orchestrator (singleton).
@@ -168,7 +240,9 @@ def get_orchestrator():
             token_tracker=get_token_tracker(),
             summarization_service=get_summarization_service(),
             router_service=get_router_service(),
-            strategy_registry=get_strategy_registry()
+            strategy_registry=get_strategy_registry(),
+            profile_manager=get_profile_manager(),
+            preference_resolver=get_preference_resolver()  # NEW: Inject PreferenceResolver (DIP)
         )
     return _orchestrator
 
@@ -207,15 +281,36 @@ def get_ocr_service():
 
 def get_file_service():
     """
-    Get file service (singleton).
+    Get file service (singleton) with SOLID extraction router.
+
+    Strategy Pattern: Extractors are registered at initialization.
+    Open/Closed: Add new extractors here without modifying router or extractors.
 
     Returns:
         FileService instance
     """
     global _file_service
     if _file_service is None:
+        from app.services.file_extraction_router import FileExtractionRouter
+        from app.services.extractors import ImageExtractor, PDFExtractor, TextExtractor
+
+        ocr_service = get_ocr_service()
+
+        # Create extraction router (SOLID)
+        extraction_router = FileExtractionRouter()
+
+        # Register extractors (Strategy Pattern)
+        # Open/Closed: New file types added by registering new extractors
+        extraction_router.register_extractor(ImageExtractor(ocr_service))
+        extraction_router.register_extractor(PDFExtractor())
+        extraction_router.register_extractor(TextExtractor())
+
+        # Future: Add new extractor without modifying existing code
+        # extraction_router.register_extractor(WordDocExtractor())
+        # extraction_router.register_extractor(ExcelExtractor())
+
         _file_service = FileService(
-            ocr_service=get_ocr_service()
+            extraction_router=extraction_router
         )
     return _file_service
 
@@ -245,18 +340,13 @@ def get_strategy_registry():
     global _strategy_registry
     if _strategy_registry is None:
         from app.services.strategy_registry import StrategyRegistry
-        from app.strategies.output_artifact_strategy import OutputArtifactStrategy
 
         registry = StrategyRegistry()
 
-        # Register strategies
-        registry.register(
-            'OUTPUT_ARTIFACT',
-            OutputArtifactStrategy(
-                ollama_host=settings.OLLAMA_HOST,
-                model=settings.POST_PROCESSING_OUTPUT_ARTIFACT_MODEL
-            )
-        )
+        # NOTE: OutputArtifactStrategy registration removed
+        # OUTPUT_ARTIFACT now uses profile.artifact_extraction_model
+        # Special handling in orchestrator.py (lines 418-465) creates fresh instances
+        # with the correct model from profile instead of using DI-initialized singleton
 
         _strategy_registry = registry
     return _strategy_registry

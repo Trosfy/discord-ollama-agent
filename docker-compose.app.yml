@@ -1,0 +1,134 @@
+# Docker Compose - Application Services
+#
+# Toggleable application services that can be started/stopped via admin dashboard.
+# Infrastructure services (admin, auth, web, logging, dynamodb) remain running.
+#
+# Services:
+# - sglang-server: High-performance LLM backend (performance profile only)
+# - fastapi-service: Main LLM API and orchestrator
+# - discord-bot: Discord bot client
+#
+# Usage:
+#   Start apps: docker compose -f docker-compose.app.yml up -d
+#   Stop apps: docker compose -f docker-compose.app.yml down
+#   View app logs: docker compose -f docker-compose.app.yml logs -f
+
+services:
+  sglang-server:
+    profiles: ["performance"]  # Only start with performance profile
+    image: lmsysorg/sglang:spark  # GB10-compatible image
+    container_name: trollama-sglang
+    ports:
+      - "30000:30000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface  # Model cache (read-write for config downloads)
+      - ~/.cache/tiktoken_encodings:/tiktoken_encodings:ro  # Tiktoken encodings for gpt-oss
+    shm_size: 32gb
+    ipc: host
+    runtime: nvidia       # NVIDIA GPU access
+
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TIKTOKEN_ENCODINGS_BASE=/tiktoken_encodings
+    command: >
+      python3 -m sglang.launch_server
+      --model-path openai/gpt-oss-120b
+      --speculative-algorithm EAGLE3
+      --speculative-draft-model-path lmsys/EAGLE3-gpt-oss-120b-bf16
+      --speculative-num-steps 2
+      --speculative-eagle-topk 4
+      --speculative-num-draft-tokens 12
+      --attention-backend triton
+      --kv-cache-dtype fp8_e5m2
+      --chunked-prefill-size 2048
+      --context-length 40960
+      --max-total-tokens 40960
+      --tp 1
+      --host 0.0.0.0
+      --port 30000
+      --reasoning-parser gpt-oss
+      --tool-call-parser gpt-oss
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--output-document=/dev/null", "http://localhost:30000/v1/models"]
+      interval: 5s
+      timeout: 10s
+      retries: 84  # Allow up to ~7 min for model to load
+      start_period: 300s  # MoE weight shuffling: ~8 min (unavoidable)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  fastapi-service:
+    build: ./fastapi-service
+    container_name: trollama-fastapi
+    ports:
+      - "8001:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Enable host.docker.internal on Linux
+    env_file:
+      - .env
+    environment:
+      - DYNAMODB_ENDPOINT=http://trollama-dynamodb:8000
+      - LOGGING_HOST=trollama-logging
+      - LOGGING_PORT=9999
+      - PYTHONPATH=/shared
+      - SGLANG_ENDPOINT=http://trollama-sglang:30000
+    volumes:
+      - ./fastapi-service:/app
+      - ./shared:/shared
+      - temp-files:/tmp/discord-bot-artifacts
+      - temp-files:/tmp/discord-bot-uploads
+    # NOTE: Infrastructure services (dynamodb, logging) must be running before starting
+    # App services connect to them via container names on trollama-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  discord-bot:
+    build: ./discord-bot
+    container_name: trollama-discord-bot
+    env_file:
+      - .env
+    environment:
+      - FASTAPI_WS_URL=ws://trollama-fastapi:8000/ws/discord
+      - ADMIN_SERVICE_URL=http://trollama-admin:8000
+      - LOGGING_HOST=trollama-logging
+      - LOGGING_PORT=9999
+      - PYTHONPATH=/shared
+    ports:
+      - "9997:9998"  # Health check port (external:internal)
+    volumes:
+      - ./discord-bot:/app
+      - ./shared:/shared
+      - temp-files:/tmp/discord-bot-artifacts
+      - temp-files:/tmp/discord-bot-uploads
+    depends_on:
+      fastapi-service:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Health endpoint checks WebSocket connection status
+
+volumes:
+  temp-files:
+    driver: local
+
+networks:
+  default:
+    name: trollama-network

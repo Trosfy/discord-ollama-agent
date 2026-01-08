@@ -121,6 +121,11 @@ class AnimationManager:
                     logger.debug(f"Animation message deleted for channel {channel_id}")
                     break
                 except discord.errors.HTTPException as e:
+                    # Check for archived thread (error code 50083)
+                    if e.code == 50083:
+                        logger.debug(f"Thread archived for channel {channel_id}, stopping animation")
+                        break
+                    # Other HTTP errors - log and continue
                     logger.warning(f"Failed to update animation for channel {channel_id}: {e}")
 
                 dot_idx += 1

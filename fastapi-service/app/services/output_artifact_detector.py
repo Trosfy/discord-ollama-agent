@@ -5,6 +5,7 @@ sys.path.insert(0, '/shared')
 import asyncio
 from strands import Agent
 from strands.models.ollama import OllamaModel
+from strands.models.openai import OpenAIModel
 from app.prompts import PromptComposer
 import logging_client
 
@@ -21,42 +22,64 @@ class OutputArtifactDetector:
 
         Args:
             ollama_host: URL of Ollama API server
-            model: Model to use for detection (default: gpt-oss:20b)
+            model: Initial model (will read dynamically from settings.ROUTER_MODEL)
         """
         self.ollama_host = ollama_host
-        self.model = model
+        # Don't cache model - read dynamically from settings.ROUTER_MODEL
 
         # Initialize PromptComposer (modular prompt system)
         self.prompt_composer = PromptComposer()
         self.detection_prompt = self.prompt_composer.get_detection_prompt()
 
-        logger.info(f"✅ OutputArtifactDetector initialized with model: {self.model}")
+        logger.info(f"✅ OutputArtifactDetector initialized (initial model: {model})")
         logger.info("✅ Detection prompt loaded from JSON config")
 
-    async def detect(self, user_message: str) -> bool:
+    async def detect(self, user_message: str, model: str = None) -> bool:
         """
         Use LLM to intelligently detect user intent for file creation.
 
         Args:
             user_message: User's input message
+            model: Override model (if None, reads from settings.ROUTER_MODEL).
+                   Typically set to profile.artifact_detection_model.
 
         Returns:
             True if user wants file output, False otherwise
         """
         try:
-            logger.info(f"🔍 Detecting OUTPUT_ARTIFACT intent: {user_message[:100]}...")
+            # Use provided model or fall back to router model
+            from app.config import get_model_capabilities, settings
+            detection_model = model or settings.ROUTER_MODEL
+            logger.info(f"Detecting OUTPUT_ARTIFACT intent with model: {detection_model}")
+            logger.debug(f"Message preview: {user_message[:100]}...")
 
-            # Create Ollama model via Strands
-            model = OllamaModel(
-                host=self.ollama_host,
-                model_id=self.model,
-                temperature=0.1  # Low temperature for consistent detection
-            )
+            model_caps = get_model_capabilities(detection_model)
+
+            if model_caps and model_caps.backend.type == "sglang":
+                # DEPRECATED: Eagle3 model (SGLang not in use)
+                logger.warning(f"⚠️  SGLang backend requested but deprecated (model: {detection_model})")
+                model_caps = None  # Force Ollama path below
+
+            if model_caps and model_caps.backend.type != "sglang":
+                # Ollama model - use standard Ollama API
+                detector_model_instance = OllamaModel(
+                    host=self.ollama_host,
+                    model_id=detection_model,
+                    temperature=0.1  # Low temperature for consistent detection
+                )
+            else:
+                # Fallback to default detection model (shouldn't happen with profiles)
+                logger.warning(f"⚠️  No valid backend for detection model {detection_model}, using Ollama fallback")
+                detector_model_instance = OllamaModel(
+                    host=self.ollama_host,
+                    model_id="qwen3:4b",  # Small, fast fallback for detection
+                    temperature=0.1
+                )
 
             # Create Strands Agent for detection
             loop = asyncio.get_event_loop()
             agent = Agent(
-                model=model,
+                model=detector_model_instance,
                 tools=[],  # No tools - pure classification
                 system_prompt=self.detection_prompt
             )

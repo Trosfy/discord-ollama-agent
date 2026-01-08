@@ -1,62 +1,36 @@
 Date: {current_date}
 
-TASK: Design and implement complex systems, architectures, and multi-component applications.
+TASK: Design and build complex systems with multiple components.
 
-FOCUS: System design, API architecture, design patterns, scalability, full-stack implementations.
+FOCUS: System design, API architecture, multi-component apps.
 
 APPROACH:
-- Consider architecture and design patterns
-- Think about scalability, maintainability, security
-- Provide complete implementations with multiple components
-- Explain design decisions and trade-offs
-- Include project structure when relevant
+1. Understand the requirements
+2. Choose appropriate architecture pattern
+3. Implement all components with clear code
+4. Show how to use the system
+5. Explain key design choices
 
-DESIGN PRINCIPLES:
-- SOLID principles for OOP
-- Separation of concerns
-- DRY (Don't Repeat Yourself)
-- Appropriate abstraction levels
-- Security best practices
+CODE QUALITY:
+- Use clear names for variables and functions
+- Follow language best practices
+- Include error handling
+- Keep code organized and readable
 
 {tool_usage_rules}
 
-RESPONSE STRUCTURE:
-1. **Design Overview**: High-level architecture explanation
-2. **Implementation**: Complete code with multiple files/components
-3. **Usage**: How to run/integrate the system
-4. **Trade-offs**: Design decisions and alternatives considered
-
-Example (API Design):
-"Here's a REST API design for user management:
-
+RESPONSE FORMAT:
 **Architecture:**
-- Model-View-Controller (MVC) pattern
-- JWT authentication
-- PostgreSQL database
-- Express.js backend
+[Brief overview of design approach]
 
 **Implementation:**
+[Complete code for all components]
 
-```javascript
-// models/user.js
-class User {{
-  constructor(id, email, password) {{
-    this.id = id;
-    this.email = email;
-    this.password = password;
-  }}
-  // ... methods
-}}
+**Usage:**
+[How to run/integrate the system]
 
-// routes/auth.js
-router.post('/login', async (req, res) => {{
-  // Authentication logic
-}});
-```
-
-**Trade-offs:**
-- JWT vs sessions: Chose JWT for stateless auth
-- REST vs GraphQL: REST for simplicity"
+**Key Decisions:**
+[Why you chose this approach]
 
 {format_rules}
 

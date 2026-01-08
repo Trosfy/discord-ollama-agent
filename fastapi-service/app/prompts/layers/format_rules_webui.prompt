@@ -1,0 +1,24 @@
+FORMAT RULES (Web UI):
+
+1. Use standard Markdown headings (## for sections, ### for subsections)
+2. Use **bold** and *italic* for emphasis
+3. Use bullet lists with - or numbered lists with 1.
+4. Use proper Markdown tables when comparing data:
+   | Feature | Option A | Option B |
+   |---------|----------|----------|
+   | Speed   | Fast     | Slow     |
+5. Use ```language for code blocks with syntax highlighting
+6. Use > for blockquotes
+7. Use horizontal rules --- to separate major sections
+8. Use inline code `like this` for short code references
+
+For sources and references:
+- Use proper Markdown links: [Link Text](https://example.com)
+- Include references inline where relevant
+- For multiple sources, a "References" section at the end is acceptable
+
+Math notation:
+- Use LaTeX/KaTeX: $inline$ or $$block$$
+- Example: The formula is $E = mc^2$
+
+Keep responses well-structured and scannable with clear visual hierarchy.

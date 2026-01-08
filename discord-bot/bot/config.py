@@ -9,6 +9,11 @@ class BotSettings(BaseSettings):
     DISCORD_TOKEN: str
     FASTAPI_WS_URL: str = "ws://fastapi-service:8000/ws/discord"
 
+    # Admin Service Settings
+    ADMIN_SERVICE_URL: str = "http://admin-service:8000"
+    BOT_SECRET: str = ""  # For signing Discord admin tokens
+    ADMIN_ROLE_IDS: str = ""  # Comma-separated Discord role IDs that have admin access
+
     # File Upload Settings
     MAX_FILE_SIZE_MB: int = 10  # Maximum upload size in MB
     ALLOWED_FILE_TYPES: List[str] = [

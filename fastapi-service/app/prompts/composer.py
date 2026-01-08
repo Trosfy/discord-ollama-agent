@@ -9,11 +9,20 @@ composition pattern using simple string formatting:
 5. USER CUSTOMIZATION - User preferences
 
 The composer loads .prompt files and uses Python's .format() for substitution.
+
+Profile-Aware Loading:
+- Automatically detects active profile (performance, conservative, balanced)
+- Loads profile-specific prompt variants when available
+- Falls back to default prompts if variant doesn't exist
 """
 
 from datetime import datetime
 from typing import List, Optional
 from app.prompts.registry import prompt_registry
+from app.config import get_active_profile
+import logging_client
+
+logger = logging_client.setup_logger('fastapi')
 
 
 class PromptComposer:
@@ -35,8 +44,17 @@ class PromptComposer:
     """
 
     def __init__(self):
-        """Initialize composer with prompt registry."""
+        """Initialize composer with prompt registry and active profile."""
         self.registry = prompt_registry
+
+        # Get active profile for profile-aware prompt loading
+        try:
+            self.profile_name = get_active_profile().profile_name
+            logger.info(f"✅ PromptComposer initialized with {self.profile_name} profile")
+        except RuntimeError:
+            # Fallback if no profile set (e.g., during initialization)
+            self.profile_name = None
+            logger.warning("⚠️  PromptComposer initialized without active profile (will use default prompts)")
 
     def compose_route_prompt(
         self,
@@ -44,6 +62,8 @@ class PromptComposer:
         postprocessing: List[str] = None,
         format_context: str = 'standard',
         user_base_prompt: Optional[str] = None,
+        context_window: Optional[int] = None,
+        source: str = 'discord',
         **kwargs
     ) -> str:
         """Compose a complete prompt using 5-layer architecture.
@@ -52,7 +72,7 @@ class PromptComposer:
         1. ROLE & IDENTITY - Who you are
         2. CRITICAL PROTOCOLS - Special cases (file creation, thinking mode)
         3. TASK DEFINITION - What to do (route-specific)
-        4. FORMAT RULES - How to format (context-aware)
+        4. FORMAT RULES - How to format (source-aware: discord vs webui)
         5. USER CUSTOMIZATION - User preferences
 
         Args:
@@ -60,6 +80,8 @@ class PromptComposer:
             postprocessing: List of postprocessing strategies (e.g., ['OUTPUT_ARTIFACT'])
             format_context: 'standard' or 'file_creation' for context-aware formatting
             user_base_prompt: Optional user custom prompt
+            context_window: Optional context window size in tokens (for performance variants)
+            source: Request source ('discord', 'webui', or other) - affects formatting rules
             **kwargs: Additional context for string formatting
 
         Returns:
@@ -70,37 +92,61 @@ class PromptComposer:
             >>> prompt = composer.compose_route_prompt(
             ...     route='math',
             ...     postprocessing=[],
-            ...     format_context='standard'
+            ...     format_context='standard',
+            ...     context_window=40960,
+            ...     source='webui'
             ... )
         """
         layers = []
         postprocessing = postprocessing or []
 
-        # LAYER 1: ROLE & IDENTITY (always first)
-        role = self.registry.get_prompt('layers', 'role')
+        # LAYER 1: ROLE & IDENTITY (always first, source-aware)
+        role_name = f'role_{source}' if source in ['webui', 'discord'] else 'role'
+        try:
+            role = self.registry.get_prompt('layers', role_name)
+            logger.debug(f"📝 Using role prompt for source: {source}")
+        except Exception:
+            # Fallback to default role if source-specific doesn't exist
+            role = self.registry.get_prompt('layers', 'role')
+            logger.debug(f"📝 Using default role prompt (source: {source})")
         layers.append(role)
 
-        # LAYER 2: CRITICAL PROTOCOLS (conditional)
+        # LAYER 2: CRITICAL PROTOCOLS (conditional, no profile variant)
         if 'OUTPUT_ARTIFACT' in postprocessing:
             protocol = self.registry.get_prompt('layers', 'file_creation_protocol')
             layers.append(protocol)
 
-        # LAYER 3: TASK DEFINITION (route-specific with substitutions)
-        route_prompt = self.registry.get_prompt('routes', route.lower())
+        # LAYER 3: TASK DEFINITION (route-specific with profile-aware loading)
+        route_prompt = self.registry.get_prompt('routes', route.lower(), profile=self.profile_name)
 
-        # Load sub-prompts for substitution
+        # Load sub-prompts for substitution (profile-aware)
         tool_usage = self.registry.get_prompt('layers', 'tool_usage')
-        format_rules = self.registry.get_prompt('layers', 'format_rules')
+        
+        # Load source-specific format rules (webui vs discord)
+        format_rules_name = f'format_rules_{source}' if source in ['webui', 'discord'] else 'format_rules'
+        try:
+            format_rules = self.registry.get_prompt('layers', format_rules_name, profile=self.profile_name)
+            logger.debug(f"📝 Using format rules for source: {source}")
+        except Exception:
+            # Fallback to default format_rules if source-specific doesn't exist
+            format_rules = self.registry.get_prompt('layers', 'format_rules', profile=self.profile_name)
+            logger.debug(f"📝 Using default format rules (source: {source})")
 
         # Format the route prompt with substitutions
+        format_vars = {
+            'current_date': datetime.now().strftime("%Y-%m-%d"),
+            'tool_usage_rules': tool_usage,
+            'format_rules': format_rules,
+            'critical_output_format': "",  # Empty for now, could load from file if needed
+            **kwargs
+        }
+
+        # Add context_window if provided (for performance variants)
+        if context_window:
+            format_vars['context_window'] = context_window
+
         try:
-            route_prompt = route_prompt.format(
-                current_date=datetime.now().strftime("%Y-%m-%d"),
-                tool_usage_rules=tool_usage,
-                format_rules=format_rules,
-                critical_output_format="",  # Empty for now, could load from file if needed
-                **kwargs
-            )
+            route_prompt = route_prompt.format(**format_vars)
         except KeyError as e:
             # If a placeholder is missing, just leave it as-is
             pass

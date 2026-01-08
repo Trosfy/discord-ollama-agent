@@ -7,6 +7,7 @@ import aioboto3
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from botocore.exceptions import ClientError
+from decimal import Decimal
 
 from app.config import settings
 
@@ -40,17 +41,22 @@ class ConversationStorage:
             await self._create_conversations_table(dynamodb)
             await self._create_users_table(dynamodb)
 
+        # Initialize vector storage table for RAG
+        from app.implementations.vector_storage import DynamoDBVectorStorage
+        vector_storage = DynamoDBVectorStorage()
+        await vector_storage.initialize_table()
+
     async def _create_conversations_table(self, dynamodb):
         """Create conversations table with GSI."""
         try:
             table = await dynamodb.create_table(
                 TableName='conversations',
                 KeySchema=[
-                    {'AttributeName': 'thread_id', 'KeyType': 'HASH'},
+                    {'AttributeName': 'conversation_id', 'KeyType': 'HASH'},
                     {'AttributeName': 'message_timestamp', 'KeyType': 'RANGE'}
                 ],
                 AttributeDefinitions=[
-                    {'AttributeName': 'thread_id', 'AttributeType': 'S'},
+                    {'AttributeName': 'conversation_id', 'AttributeType': 'S'},
                     {'AttributeName': 'message_timestamp', 'AttributeType': 'S'},
                     {'AttributeName': 'user_id', 'AttributeType': 'S'}
                 ],
@@ -109,18 +115,18 @@ class ConversationStorage:
     # Conversation Methods (IConversationStorage)
     # ============================================================================
 
-    async def get_thread_messages(
+    async def get_conversation_messages(
         self,
-        thread_id: str,
+        conversation_id: str,
         limit: Optional[int] = None
     ) -> List[Dict]:
-        """Get messages for a thread, ordered chronologically."""
+        """Get messages for a conversation, ordered chronologically."""
         async with self.session.resource('dynamodb', **self._resource_config) as dynamodb:
             table = await dynamodb.Table('conversations')
 
             params = {
-                'KeyConditionExpression': 'thread_id = :tid',
-                'ExpressionAttributeValues': {':tid': thread_id},
+                'KeyConditionExpression': 'conversation_id = :cid',
+                'ExpressionAttributeValues': {':cid': conversation_id},
                 'ScanIndexForward': True
             }
             if limit:
@@ -131,16 +137,17 @@ class ConversationStorage:
 
     async def add_message(
         self,
-        thread_id: str,
+        conversation_id: str,
         message_id: str,
         role: str,
         content: str,
         token_count: int,
         user_id: str,
         model_used: str,
-        is_summary: bool = False
+        is_summary: bool = False,
+        generation_time: Optional[float] = None
     ) -> None:
-        """Add a message to a thread."""
+        """Add a message to a conversation."""
         # Truncate content if it exceeds DynamoDB's size limit
         content_bytes = content.encode('utf-8')
         if len(content_bytes) > MAX_MESSAGE_SIZE:
@@ -150,8 +157,8 @@ class ConversationStorage:
 
         async with self.session.resource('dynamodb', **self._resource_config) as dynamodb:
             table = await dynamodb.Table('conversations')
-            await table.put_item(Item={
-                'thread_id': thread_id,
+            item = {
+                'conversation_id': conversation_id,
                 'message_timestamp': datetime.now(timezone.utc).isoformat(),
                 'message_id': message_id,
                 'role': role,
@@ -160,29 +167,36 @@ class ConversationStorage:
                 'user_id': user_id,
                 'model_used': model_used,
                 'is_summary': is_summary
-            })
+            }
+
+            # Add generation_time if provided (only for assistant messages)
+            # Convert float to Decimal for DynamoDB compatibility
+            if generation_time is not None:
+                item['generation_time'] = Decimal(str(generation_time))
+
+            await table.put_item(Item=item)
 
     async def delete_messages(
         self,
-        thread_id: str,
+        conversation_id: str,
         message_timestamps: List[str]
     ) -> None:
-        """Batch delete messages from a thread."""
+        """Batch delete messages from a conversation."""
         async with self.session.resource('dynamodb', **self._resource_config) as dynamodb:
             table = await dynamodb.Table('conversations')
             async with table.batch_writer() as batch:
                 for timestamp in message_timestamps:
                     await batch.delete_item(Key={
-                        'thread_id': thread_id,
+                        'conversation_id': conversation_id,
                         'message_timestamp': timestamp
                     })
 
-    async def get_user_threads(
+    async def get_user_conversations(
         self,
         user_id: str,
         limit: int = 10
     ) -> List[str]:
-        """Get list of thread IDs for a user."""
+        """Get list of conversation IDs for a user."""
         async with self.session.resource('dynamodb', **self._resource_config) as dynamodb:
             table = await dynamodb.Table('conversations')
             response = await table.query(
@@ -193,5 +207,5 @@ class ConversationStorage:
                 Limit=limit * 10
             )
 
-            thread_ids = list(set(item['thread_id'] for item in response['Items']))
-            return thread_ids[:limit]
+            conversation_ids = list(set(item['conversation_id'] for item in response['Items']))
+            return conversation_ids[:limit]

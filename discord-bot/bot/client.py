@@ -84,7 +84,7 @@ class DiscordBotClient(commands.Bot):
             try:
                 await self.ws_manager.send_message({
                     'type': 'reset',
-                    'thread_id': thread_id,
+                    'conversation_id': thread_id,
                     'user_id': str(interaction.user.id)
                 })
 
@@ -119,7 +119,7 @@ class DiscordBotClient(commands.Bot):
             try:
                 await self.ws_manager.send_message({
                     'type': 'summarize',
-                    'thread_id': thread_id,
+                    'conversation_id': thread_id,
                     'user_id': str(interaction.user.id),
                     'interaction_id': str(interaction.id)  # Track interaction for follow-up
                 })
@@ -155,7 +155,7 @@ class DiscordBotClient(commands.Bot):
                 # Send close request to FastAPI to delete from DynamoDB
                 await self.ws_manager.send_message({
                     'type': 'close',
-                    'thread_id': thread_id,
+                    'conversation_id': thread_id,
                     'user_id': str(interaction.user.id)
                 })
 
@@ -340,6 +340,11 @@ class DiscordBotClient(commands.Bot):
                     f"❌ Failed to reset preferences: {str(e)}",
                     ephemeral=True
                 )
+
+        # Register admin command group
+        from bot.admin_commands import admin
+        self.tree.add_command(admin)
+        logger.info("✅ Admin commands registered")
 
     async def setup_hook(self):
         """Setup hook called when bot starts."""
