@@ -40,8 +40,8 @@ class HealthCheckerService:
             'timeout': 5,
             'critical': True
         },
-        'fastapi': {
-            'url': 'http://trollama-fastapi:8000/health',
+        'troise-ai': {
+            'url': 'http://troise-ai:8000/health',
             'timeout': 10,
             'critical': True
         },
@@ -268,7 +268,7 @@ class HealthCheckerService:
             {
                 'logging': {'healthy': True, 'status_code': 200, 'timestamp': ...},
                 'dynamodb': {'healthy': True, 'status_code': 400, 'timestamp': ...},
-                'fastapi': {'healthy': True, 'status_code': 200, 'timestamp': ...},
+                'troise-ai': {'healthy': True, 'status_code': 200, 'timestamp': ...},
                 'discord-bot': {'healthy': True, 'status_code': 200, 'timestamp': ...},
                 'auth': {'healthy': True, 'status_code': 200, 'timestamp': ...},
                 'sglang': {'healthy': None, 'skipped': True}  # Optional service

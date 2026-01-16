@@ -20,10 +20,10 @@ containers:
     # - Starting container with docker-compose
     # - Monitoring health check until container is ready (~5-10 minutes)
     # - Re-enabling earlyoom and disabling swap after startup
-    start_script: "./scripts/model_management/start_sglang.sh"
+    start_script: "./scripts/model_management/sglang/start.sh"
 
     # Custom stop script for graceful shutdown
-    stop_script: "./scripts/model_management/stop_sglang.sh"
+    stop_script: "./scripts/model_management/sglang/stop.sh"
 
     # Timeout for script execution (seconds)
     # SGLang startup includes MoE weight shuffling which takes ~5-10 minutes

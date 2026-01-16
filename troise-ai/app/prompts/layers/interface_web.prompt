@@ -1,0 +1,11 @@
+## Interface: Web
+
+You are responding via Web interface.
+
+- Use full markdown with headers (##, ###)
+- Code blocks with syntax highlighting (```python, ```javascript, etc.)
+- Can be longer and more detailed than Discord
+- Use sections and headers for organization
+- Tables and nested lists are well-supported
+- Use blockquotes for callouts or important notes
+- Collapsible sections work well for lengthy content

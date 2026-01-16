@@ -1,0 +1,63 @@
+# SGLang High-Performance LLM Backend
+#
+# Standalone SGLang server for gpt-oss-120b with EAGLE3 speculative decoding.
+# Requires ~84GB GPU memory and ~50GB swap during startup.
+#
+# Usage:
+#   Start: ./scripts/model_management/sglang/start.sh
+#   Stop:  ./scripts/model_management/sglang/stop.sh
+#   Status: ./scripts/model_management/sglang/status.sh
+#
+# NOTE: Use the scripts above - they handle swap/earlyoom/memory management.
+# Do not run `docker compose up` directly.
+
+services:
+  sglang-server:
+    image: lmsysorg/sglang:spark  # GB10-compatible image
+    container_name: trollama-sglang
+    ports:
+      - "30000:30000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface  # Model cache (read-write for config downloads)
+      - ~/.cache/tiktoken_encodings:/tiktoken_encodings:ro  # Tiktoken encodings for gpt-oss
+    shm_size: 32gb
+    ipc: host
+    runtime: nvidia  # NVIDIA GPU access
+
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TIKTOKEN_ENCODINGS_BASE=/tiktoken_encodings
+    command: >
+      python3 -m sglang.launch_server
+      --model-path openai/gpt-oss-120b
+      --speculative-algorithm EAGLE3
+      --speculative-draft-model-path lmsys/EAGLE3-gpt-oss-120b-bf16
+      --speculative-num-steps 2
+      --speculative-eagle-topk 4
+      --speculative-num-draft-tokens 12
+      --attention-backend triton
+      --kv-cache-dtype fp8_e5m2
+      --chunked-prefill-size 2048
+      --context-length 40960
+      --max-total-tokens 40960
+      --tp 1
+      --host 0.0.0.0
+      --port 30000
+      --reasoning-parser gpt-oss
+      --tool-call-parser gpt-oss
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--output-document=/dev/null", "http://localhost:30000/v1/models"]
+      interval: 5s
+      timeout: 10s
+      retries: 84  # Allow up to ~7 min for model to load
+      start_period: 300s  # MoE weight shuffling: ~8 min (unavoidable)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+networks:
+  default:
+    name: trollama-network

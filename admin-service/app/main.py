@@ -32,7 +32,7 @@ app.add_middleware(
 async def startup_event():
     """Initialize services on startup."""
     logger.info(f"🚀 Starting {settings.SERVICE_NAME} v{settings.SERVICE_VERSION}")
-    logger.info(f"📍 FastAPI URL: {settings.FASTAPI_URL}")
+    logger.info(f"📍 TROISE AI URL: {settings.TROISE_AI_URL}")
     logger.info(f"🔐 JWT authentication enabled")
 
     if settings.DISCORD_ADMIN_WEBHOOK_URL:
@@ -41,7 +41,7 @@ async def startup_event():
         logger.warning("⚠️  Discord webhook not configured - notifications disabled")
 
     if not settings.INTERNAL_API_KEY:
-        logger.warning("⚠️  INTERNAL_API_KEY not set - cannot communicate with fastapi-service")
+        logger.warning("⚠️  INTERNAL_API_KEY not set - cannot communicate with TROISE AI")
 
     # Start health checker service (independent - monitors service health)
     from app.services.health_checker_service import HealthCheckerService

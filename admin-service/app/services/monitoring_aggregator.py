@@ -219,25 +219,25 @@ class MonitoringAggregator:
             logger.warning(f"Logging check failed: {e}")
             return False
 
-    async def check_fastapi(self) -> bool:
-        """Check FastAPI service."""
+    async def check_troise_ai(self) -> bool:
+        """Check TROISE AI service."""
         try:
-            response = await self.http_client.get(f"{settings.FASTAPI_URL}/health")
+            response = await self.http_client.get(f"{settings.TROISE_AI_URL}/health")
             return response.status_code == 200
         except Exception as e:
-            logger.warning(f"FastAPI check failed: {e}")
+            logger.warning(f"TROISE AI check failed: {e}")
             return False
 
     async def fetch_queue_stats(self) -> dict:
         """
-        Fetch queue statistics from fastapi-service.
+        Fetch queue statistics from TROISE AI.
 
         Returns dict with:
         - size: int
         """
         try:
             response = await self.http_client.get(
-                f"{settings.FASTAPI_URL}/health"
+                f"{settings.TROISE_AI_URL}/health"
             )
             response.raise_for_status()
             health_data = response.json()

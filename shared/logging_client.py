@@ -20,17 +20,7 @@ def setup_logger(service_name: str) -> logging.Logger:
     log_host = os.getenv('LOGGING_HOST', 'logging-service')
     log_port = int(os.getenv('LOGGING_PORT', 9999))
 
-    # Create logger
-    logger = logging.getLogger(service_name)
-    logger.setLevel(logging.DEBUG)
-
-    # Remove existing handlers
-    logger.handlers = []
-
-    # Add socket handler to send to logging service
-    socket_handler = logging.handlers.SocketHandler(log_host, log_port)
-
-    # Add service name to all log records
+    # Add service name to all log records (must be done before creating handlers)
     old_factory = logging.getLogRecordFactory()
 
     def record_factory(*args, **kwargs):
@@ -40,14 +30,28 @@ def setup_logger(service_name: str) -> logging.Logger:
 
     logging.setLogRecordFactory(record_factory)
 
-    logger.addHandler(socket_handler)
+    # Create handlers
+    # Socket handler sends DEBUG+ to centralized logging service
+    socket_handler = logging.handlers.SocketHandler(log_host, log_port)
+    socket_handler.setLevel(logging.DEBUG)
 
-    # Also add console handler for local debugging
+    # Console handler shows INFO+ only (less verbose)
     console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter(
         '%(asctime)s - [%(service)s] - %(levelname)s - %(message)s'
     )
     console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
+
+    # Configure root logger so all module loggers (using __name__) inherit handlers
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)  # Allow DEBUG through, handlers filter
+    root_logger.handlers = []  # Clear existing handlers
+    root_logger.addHandler(socket_handler)
+    root_logger.addHandler(console_handler)
+
+    # Also create the named service logger for direct use
+    logger = logging.getLogger(service_name)
+    logger.setLevel(logging.DEBUG)
 
     return logger

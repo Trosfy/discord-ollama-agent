@@ -58,8 +58,8 @@ Returns result with status, message, and method
 ```yaml
 containers:
   trollama-sglang:
-    start_script: "./scripts/model_management/start_sglang.sh"
-    stop_script: "./scripts/model_management/stop_sglang.sh"
+    start_script: "./scripts/model_management/sglang/start.sh"
+    stop_script: "./scripts/model_management/sglang/stop.sh"
     timeout: 720  # 12 minutes for model loading
 ```
 
@@ -158,7 +158,7 @@ echo "Starting application services..."
 docker compose up -d trollama-fastapi trollama-discord-bot
 
 echo "Starting SGLang (this will take ~5 minutes)..."
-./scripts/model_management/start_sglang.sh
+./scripts/model_management/sglang/start.sh
 
 echo "Starting UI services..."
 docker compose up -d trollama-streamlit trollama-open-webui

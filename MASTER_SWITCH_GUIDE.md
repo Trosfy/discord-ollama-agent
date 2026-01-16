@@ -84,18 +84,12 @@ Response:
 ## Master Scripts
 
 ### start.sh
-- Loads VRAM_PROFILE from .env
-- **Conservative/Balanced**: `docker compose --profile $VRAM_PROFILE up -d`
-- **Performance**: 
-  1. Pulls SGLang image if needed
-  2. Runs `./scripts/model_management/start_sglang.sh`
-  3. Waits for SGLang health check
-  4. Starts dependent services
+- Starts application services via `docker compose -f docker-compose.app.yml up -d`
+- SGLang is managed separately via `./scripts/model_management/sglang/start.sh`
 
-### stop.sh (NEW)
-- Stops application services first
-- If performance profile: runs `./scripts/model_management/stop_sglang.sh`
-- Graceful shutdown with proper cleanup
+### stop.sh
+- Stops application services via `docker compose -f docker-compose.app.yml down`
+- SGLang is managed separately via `./scripts/model_management/sglang/stop.sh`
 
 ## Visual Design
 
@@ -227,7 +221,7 @@ docker compose ps  # Should show no running services
 
 **Fix**:
 1. Increase timeout in [system.py:393](admin-service/app/api/system.py#L393)
-2. Or start SGLang manually first: `./scripts/model_management/start_sglang.sh`
+2. Or start SGLang manually first: `./scripts/model_management/sglang/start.sh`
 3. Then toggle master ON for other services
 
 ### Master Switch Shows Wrong State

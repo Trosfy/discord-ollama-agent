@@ -4,9 +4,11 @@
 # Infrastructure services (admin, auth, web, logging, dynamodb) remain running.
 #
 # Services:
-# - sglang-server: High-performance LLM backend (performance profile only)
-# - fastapi-service: Main LLM API and orchestrator
+# - fastapi-service: Main LLM API and orchestrator (legacy profile)
+# - troise-ai: New TROISE AI service
 # - discord-bot: Discord bot client
+#
+# SGLang is managed separately via: ./scripts/model_management/sglang/
 #
 # Usage:
 #   Start apps: docker compose -f docker-compose.app.yml up -d
@@ -14,54 +16,8 @@
 #   View app logs: docker compose -f docker-compose.app.yml logs -f
 
 services:
-  sglang-server:
-    profiles: ["performance"]  # Only start with performance profile
-    image: lmsysorg/sglang:spark  # GB10-compatible image
-    container_name: trollama-sglang
-    ports:
-      - "30000:30000"
-    volumes:
-      - ~/.cache/huggingface:/root/.cache/huggingface  # Model cache (read-write for config downloads)
-      - ~/.cache/tiktoken_encodings:/tiktoken_encodings:ro  # Tiktoken encodings for gpt-oss
-    shm_size: 32gb
-    ipc: host
-    runtime: nvidia       # NVIDIA GPU access
-
-    environment:
-      - CUDA_VISIBLE_DEVICES=0
-      - TIKTOKEN_ENCODINGS_BASE=/tiktoken_encodings
-    command: >
-      python3 -m sglang.launch_server
-      --model-path openai/gpt-oss-120b
-      --speculative-algorithm EAGLE3
-      --speculative-draft-model-path lmsys/EAGLE3-gpt-oss-120b-bf16
-      --speculative-num-steps 2
-      --speculative-eagle-topk 4
-      --speculative-num-draft-tokens 12
-      --attention-backend triton
-      --kv-cache-dtype fp8_e5m2
-      --chunked-prefill-size 2048
-      --context-length 40960
-      --max-total-tokens 40960
-      --tp 1
-      --host 0.0.0.0
-      --port 30000
-      --reasoning-parser gpt-oss
-      --tool-call-parser gpt-oss
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--output-document=/dev/null", "http://localhost:30000/v1/models"]
-      interval: 5s
-      timeout: 10s
-      retries: 84  # Allow up to ~7 min for model to load
-      start_period: 300s  # MoE weight shuffling: ~8 min (unavoidable)
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "5"
-
   fastapi-service:
+    profiles: ["legacy"]  # Use --profile legacy to start old fastapi-service
     build: ./fastapi-service
     container_name: trollama-fastapi
     ports:
@@ -96,13 +52,52 @@ services:
       retries: 3
       start_period: 30s
 
+  troise-ai:
+    build: ./troise-ai
+    container_name: troise-ai
+    ports:
+      - "8001:8000"  # Same port as fastapi-service (replaces it)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Enable host.docker.internal on Linux
+    env_file:
+      - .env
+    environment:
+      - DYNAMODB_ENDPOINT=http://trollama-dynamodb:8000
+      - LOGGING_HOST=trollama-logging
+      - LOGGING_PORT=9999
+      - PYTHONPATH=/shared
+      - SGLANG_ENDPOINT=http://trollama-sglang:30000
+      # MinIO settings
+      - MINIO_ENDPOINT=troise-minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=troise-files
+      # SearXNG for web search
+      - SEARXNG_HOST=http://troise-searxng:8080
+    volumes:
+      - ./troise-ai:/app
+      - ./shared:/shared
+      - ./troise-ai/config:/app/config
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   discord-bot:
     build: ./discord-bot
     container_name: trollama-discord-bot
     env_file:
       - .env
     environment:
-      - FASTAPI_WS_URL=ws://trollama-fastapi:8000/ws/discord
+      - TROISE_WS_URL=ws://troise-ai:8000  # TROISE AI WebSocket (native protocol)
       - ADMIN_SERVICE_URL=http://trollama-admin:8000
       - LOGGING_HOST=trollama-logging
       - LOGGING_PORT=9999
@@ -112,10 +107,8 @@ services:
     volumes:
       - ./discord-bot:/app
       - ./shared:/shared
-      - temp-files:/tmp/discord-bot-artifacts
-      - temp-files:/tmp/discord-bot-uploads
     depends_on:
-      fastapi-service:
+      troise-ai:
         condition: service_healthy
     restart: unless-stopped
     logging:
@@ -125,8 +118,93 @@ services:
         max-file: "3"
     # Health endpoint checks WebSocket connection status
 
+  # SearXNG - Privacy-focused metasearch engine (used by troise-ai web search)
+  searxng:
+    image: searxng/searxng:latest
+    container_name: troise-searxng
+    restart: unless-stopped
+    ports:
+      - "8082:8080"  # External 8082 (8080 used by trollama-web), internal 8080
+    volumes:
+      - ./troise-ai/docker/searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Browserless - Headless Chrome for web scraping (used by troise-ai)
+  browserless:
+    image: browserless/chrome:latest
+    container_name: troise-browserless
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - MAX_CONCURRENT_SESSIONS=5
+      - MAX_QUEUE_LENGTH=10
+      - CONNECTION_TIMEOUT=60000
+      - TIMEOUT=60000
+      - PREBOOT_CHROME=true
+      - KEEP_ALIVE=true
+      - ENABLE_DEBUGGER=false
+      - ENABLE_CORS=true
+      - DEFAULT_STEALTH=true
+      - DEFAULT_BLOCK_ADS=true
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # MinIO - S3-compatible object storage for file uploads
+  minio:
+    image: minio/minio
+    container_name: troise-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   temp-files:
+    driver: local
+  minio_data:
     driver: local
 
 networks:

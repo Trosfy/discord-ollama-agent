@@ -146,8 +146,6 @@ services:
         condition: service_healthy
       logging-service:
         condition: service_healthy
-      # NOTE: fastapi-service dependency removed - admin can run without it
-      # It will just show fastapi as "unhealthy" in monitoring
     restart: unless-stopped
     logging:
       driver: "json-file"

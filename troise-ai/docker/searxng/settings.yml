@@ -1,0 +1,118 @@
+# SearXNG Configuration for TROISE AI
+# Anti-WAF: User-Agent rotation, custom headers, retries
+
+use_default_settings: true
+
+server:
+  secret_key: "change-me-in-production-use-openssl-rand-hex-32"
+  limiter: false
+  image_proxy: true
+  http_protocol_version: "1.1"
+
+ui:
+  default_locale: "en"
+  query_in_title: false
+  infinite_scroll: false
+  default_theme: "simple"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+# Anti-WAF: Outgoing request configuration
+outgoing:
+  useragent_suffix: ""
+
+  # Rotating User-Agents
+  useragents:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15"
+    - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
+
+  # Browser-like headers
+  extra_headers:
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+    Accept-Language: "en-US,en;q=0.9"
+    Accept-Encoding: "gzip, deflate, br"
+    DNT: "1"
+    Connection: "keep-alive"
+    Upgrade-Insecure-Requests: "1"
+    Sec-Fetch-Dest: "document"
+    Sec-Fetch-Mode: "navigate"
+    Sec-Fetch-Site: "none"
+    Sec-Fetch-User: "?1"
+    Cache-Control: "max-age=0"
+
+  retries: 3
+  retry_on_http_error: [429, 500, 502, 503, 504]
+  pool_connections: 100
+  pool_maxsize: 100
+  request_timeout: 10.0
+  max_request_timeout: 15.0
+  enable_http2: true
+
+engines:
+  # Primary search engines
+  - name: google
+    disabled: false
+    timeout: 10.0
+    retry_on_http_error: [429, 500, 502, 503]
+    suspend_time: 3600
+    suspend_end_time: 86400
+
+  - name: bing
+    disabled: false
+    timeout: 10.0
+    retry_on_http_error: [429, 500, 502, 503]
+    suspend_time: 3600
+    suspend_end_time: 86400
+
+  - name: brave
+    disabled: false
+    timeout: 10.0
+    retry_on_http_error: [429, 500, 502, 503]
+    suspend_time: 3600
+    suspend_end_time: 86400
+
+  - name: duckduckgo
+    disabled: false
+    timeout: 12.0
+    retry_on_http_error: [429, 500, 502, 503, 504]
+    suspend_time: 7200
+    suspend_end_time: 86400
+
+  # Reference engines
+  - name: wikipedia
+    disabled: false
+    timeout: 8.0
+
+  - name: github
+    disabled: false
+    timeout: 8.0
+
+  - name: wikidata
+    disabled: false
+    timeout: 8.0
+
+  - name: arxiv
+    disabled: false
+    timeout: 8.0
+
+  - name: stackoverflow
+    disabled: false
+    timeout: 8.0
+
+  # Disabled problematic engines
+  - name: qwant
+    disabled: true
+
+  - name: startpage
+    disabled: true

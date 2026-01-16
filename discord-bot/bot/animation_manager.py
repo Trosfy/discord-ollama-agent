@@ -9,9 +9,15 @@ logger = logging_client.setup_logger('discord-bot')
 class AnimationManager:
     """Manages status message animations with cycling dots."""
 
-    def __init__(self):
-        """Initialize animation manager."""
+    def __init__(self, rate_limiter=None):
+        """
+        Initialize animation manager.
+
+        Args:
+            rate_limiter: Optional GlobalRateLimiter instance for coordinated rate limiting
+        """
         self.tasks = {}  # channel_id -> asyncio.Task
+        self.rate_limiter = rate_limiter
 
     def is_status_message(self, content: str) -> bool:
         """
@@ -115,6 +121,9 @@ class AnimationManager:
                 content = f"*{base_text}{dots}*"
 
                 try:
+                    # Acquire rate limit token before edit (if rate limiter available)
+                    if self.rate_limiter:
+                        await self.rate_limiter.acquire()
                     await message.edit(content=content)
                 except discord.errors.NotFound:
                     # Message was deleted
@@ -129,7 +138,7 @@ class AnimationManager:
                     logger.warning(f"Failed to update animation for channel {channel_id}: {e}")
 
                 dot_idx += 1
-                await asyncio.sleep(1.1)
+                await asyncio.sleep(1.5)  # Increased from 1.1s to reduce rate limit pressure
         except asyncio.CancelledError:
             # Animation cancelled - normal flow when content arrives
             logger.debug(f"Animation cancelled for channel {channel_id}")

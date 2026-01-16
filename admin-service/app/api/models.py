@@ -327,13 +327,13 @@ async def get_models_summary(
         # Fetch loaded models with accurate is_loaded flag
         loaded_models = await system_metrics.fetch_loaded_models()
 
-        # Fetch queue size from fastapi-service
+        # Fetch queue size from TROISE AI
         queue_size = 0
         async with httpx.AsyncClient(timeout=5.0) as client:
             try:
-                fastapi_response = await client.get(f"{settings.FASTAPI_URL}/health")
-                if fastapi_response.status_code == 200:
-                    health_data = fastapi_response.json()
+                troise_response = await client.get(f"{settings.TROISE_AI_URL}/health")
+                if troise_response.status_code == 200:
+                    health_data = troise_response.json()
                     queue_size = health_data.get("queue_size", 0)
             except Exception as e:
                 logger.warning(f"Failed to fetch queue stats: {e}")

@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from bot.utils import split_message
+from bot.utils import split_message, track_code_block_state, find_stream_split_point
 
 
 def test_split_message_no_split():
@@ -149,3 +149,116 @@ async def test_message_handler_handle_failed():
     call_args = mock_channel.send.call_args[0][0]
     assert 'failed after 3 attempts' in call_args
     assert 'Test error' in call_args
+
+
+# Tests for track_code_block_state
+def test_track_code_block_state_no_code():
+    """Test content without code blocks."""
+    is_open, lang = track_code_block_state("Hello world, no code here!")
+    assert is_open is False
+    assert lang is None
+
+
+def test_track_code_block_state_open_block():
+    """Test content with an open code block."""
+    is_open, lang = track_code_block_state("```python\ndef foo():\n    pass")
+    assert is_open is True
+    assert lang == 'python'
+
+
+def test_track_code_block_state_closed_block():
+    """Test content with a closed code block."""
+    is_open, lang = track_code_block_state("```python\ndef foo():\n    pass\n```")
+    assert is_open is False
+    assert lang is None
+
+
+def test_track_code_block_state_no_language():
+    """Test code block without language specifier."""
+    is_open, lang = track_code_block_state("```\nsome code here")
+    assert is_open is True
+    assert lang == ''
+
+
+def test_track_code_block_state_multiple_blocks():
+    """Test multiple code blocks - last one open."""
+    content = "```python\ncode1\n```\n\nText between\n\n```javascript\ncode2"
+    is_open, lang = track_code_block_state(content)
+    assert is_open is True
+    assert lang == 'javascript'
+
+
+def test_track_code_block_state_multiple_blocks_closed():
+    """Test multiple code blocks - all closed."""
+    content = "```python\ncode1\n```\n\n```javascript\ncode2\n```"
+    is_open, lang = track_code_block_state(content)
+    assert is_open is False
+    assert lang is None
+
+
+# Tests for find_stream_split_point
+def test_find_stream_split_point_too_short():
+    """Test that short content returns no split."""
+    content = "A" * 1800
+    split_at, suffix, prefix = find_stream_split_point(content, threshold=1800)
+    assert split_at == 0
+    assert suffix is None
+    assert prefix is None
+
+
+def test_find_stream_split_point_paragraph():
+    """Test splitting at paragraph boundary."""
+    content = "A" * 1700 + "\n\n" + "B" * 200
+    split_at, suffix, prefix = find_stream_split_point(content, threshold=1800)
+    assert split_at == 1702  # After the \n\n
+    assert suffix is None
+    assert prefix is None
+
+
+def test_find_stream_split_point_line():
+    """Test splitting at line boundary when no paragraph."""
+    content = "A" * 1700 + "\n" + "B" * 200
+    split_at, suffix, prefix = find_stream_split_point(content, threshold=1800)
+    assert split_at == 1701  # After the \n
+    assert suffix is None
+    assert prefix is None
+
+
+def test_find_stream_split_point_sentence():
+    """Test splitting at sentence boundary."""
+    content = "A" * 1700 + ". " + "B" * 200
+    split_at, suffix, prefix = find_stream_split_point(content, threshold=1800)
+    assert split_at == 1702  # After the ". "
+    assert suffix is None
+    assert prefix is None
+
+
+def test_find_stream_split_point_word():
+    """Test splitting at word boundary."""
+    content = "A" * 1700 + " " + "B" * 200
+    split_at, suffix, prefix = find_stream_split_point(content, threshold=1800)
+    assert split_at == 1701  # After the space
+    assert suffix is None
+    assert prefix is None
+
+
+def test_find_stream_split_point_with_code_block():
+    """Test splitting inside a code block adds close/open markers."""
+    content = "```python\n" + "x = 1\n" * 350  # ~2100 chars (must be > threshold + min_remaining)
+    split_at, suffix, prefix = find_stream_split_point(content, threshold=1800, min_remaining=100)
+
+    # Should have split point
+    assert split_at > 0
+
+    # Should have close/open markers for code block
+    assert suffix == '\n```'
+    assert prefix == '```python\n'
+
+
+def test_find_stream_split_point_hard_split():
+    """Test hard split when no natural boundaries exist."""
+    content = "A" * 2000  # No spaces, newlines, or periods
+    split_at, suffix, prefix = find_stream_split_point(content, threshold=1800)
+    assert split_at == 1800  # Hard split at threshold
+    assert suffix is None
+    assert prefix is None

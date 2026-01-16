@@ -26,7 +26,7 @@ class SystemService:
 
     def __init__(self):
         """Initialize system service with HTTP client."""
-        self.fastapi_url = settings.FASTAPI_URL
+        self.troise_ai_url = settings.TROISE_AI_URL
         self.api_key = settings.INTERNAL_API_KEY
 
     async def get_queue_stats(self) -> Dict:

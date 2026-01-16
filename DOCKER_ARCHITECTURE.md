@@ -160,14 +160,14 @@ Some containers require custom start/stop scripts instead of default `docker sta
 ```yaml
 containers:
   trollama-sglang:
-    start_script: "./scripts/model_management/start_sglang.sh"
-    stop_script: "./scripts/model_management/stop_sglang.sh"
+    start_script: "./scripts/model_management/sglang/start.sh"
+    stop_script: "./scripts/model_management/sglang/stop.sh"
     description: "SGLang model server with MoE weight shuffling and earlyoom management"
     timeout: 720  # 12 minutes for model loading
 ```
 
 ### SGLang Custom Startup
-SGLang requires complex startup (see [scripts/model_management/start_sglang.sh](scripts/model_management/start_sglang.sh)):
+SGLang requires complex startup (see [scripts/model_management/sglang/start.sh](scripts/model_management/sglang/start.sh)):
 1. Enable swap for MoE weight shuffling (~50GB RAM needed)
 2. Disable earlyoom during startup (prevent OOM kills)
 3. Flush buffer cache to maximize available memory

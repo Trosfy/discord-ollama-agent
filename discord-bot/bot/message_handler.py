@@ -2,17 +2,73 @@
 import sys
 sys.path.insert(0, '/shared')
 
+import base64
 import discord
 import io
 import asyncio
 import re
+import time
 from bot.websocket_manager import WebSocketManager
-from bot.utils import split_message, validate_attachment, encode_file_base64
+from bot.utils import split_message, validate_attachment, encode_file_base64, find_stream_split_point
 from bot.animation_manager import AnimationManager
 import logging_client
 
 # Initialize logger
 logger = logging_client.setup_logger('discord-bot')
+
+
+class GlobalRateLimiter:
+    """
+    Global rate limiter for Discord API edits using token bucket algorithm.
+
+    Coordinates all edit operations across channels to prevent hitting
+    Discord's global rate limit when multiple streams are active.
+    """
+
+    def __init__(self, rate: float = 2.5):
+        """
+        Initialize rate limiter.
+
+        Args:
+            rate: Maximum edits per second globally (default 2.5)
+        """
+        self.rate = rate
+        self.tokens = rate  # Start with full bucket
+        self.last_refill = time.time()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self):
+        """
+        Acquire a token before making a Discord API edit.
+
+        Blocks if no tokens available until one is refilled.
+        """
+        async with self._lock:
+            now = time.time()
+            # Refill tokens based on elapsed time
+            elapsed = now - self.last_refill
+            self.tokens = min(self.rate, self.tokens + elapsed * self.rate)
+            self.last_refill = now
+
+            # Wait if no tokens available
+            if self.tokens < 1:
+                wait_time = (1 - self.tokens) / self.rate
+                logger.debug(f"Rate limiter: waiting {wait_time:.2f}s for token")
+                await asyncio.sleep(wait_time)
+                self.tokens = 0
+            else:
+                self.tokens -= 1
+
+
+# Global rate limiter instance (shared across all streams and animations)
+global_rate_limiter = GlobalRateLimiter(rate=2.5)
+
+# Discord rate limit: increased from 1000ms to reduce concurrent edit collisions
+MIN_STREAM_INTERVAL_MS = 1500
+
+# Multi-message streaming thresholds
+SPLIT_THRESHOLD = 1800           # When to trigger mid-stream split
+MIN_NEW_MESSAGE_CONTENT = 100    # Minimum content for new message
 
 
 class MessageHandler:
@@ -21,7 +77,8 @@ class MessageHandler:
     def __init__(self, bot, ws_manager: WebSocketManager):
         self.bot = bot
         self.ws_manager = ws_manager
-        self.animation_manager = AnimationManager()  # Dedicated animation management
+        self.rate_limiter = global_rate_limiter  # Shared rate limiter
+        self.animation_manager = AnimationManager(rate_limiter=global_rate_limiter)  # Share rate limiter
 
     async def handle_user_message(self, message: discord.Message):
         """
@@ -60,16 +117,16 @@ class MessageHandler:
         except Exception as e:
             logger.error(f"Failed to add reaction: {e}")
 
-        # Process file attachments
-        attachments = []
+        # Process file attachments (TROISE AI format)
+        files = []
         if message.attachments:
-            logger.info(f"📎 Processing {len(message.attachments)} attachment(s)")
+            logger.info(f"Processing {len(message.attachments)} attachment(s)")
 
             for attachment in message.attachments:
                 # Validate attachment
                 if not validate_attachment(attachment):
-                    logger.warning(f"⚠️  Skipping invalid attachment: {attachment.filename} ({attachment.size} bytes, {attachment.content_type})")
-                    await thread.send(f"⚠️ Skipped `{attachment.filename}`: file too large or unsupported type")
+                    logger.warning(f"Skipping invalid attachment: {attachment.filename} ({attachment.size} bytes, {attachment.content_type})")
+                    await thread.send(f"Skipped `{attachment.filename}`: file too large or unsupported type")
                     continue
 
                 # Download and encode file
@@ -77,75 +134,102 @@ class MessageHandler:
                     file_data = await attachment.read()
                     file_base64 = encode_file_base64(file_data)
 
-                    attachments.append({
+                    files.append({
                         'filename': attachment.filename,
-                        'content_type': attachment.content_type or 'application/octet-stream',
-                        'size': attachment.size,
-                        'data_base64': file_base64
+                        'mimetype': attachment.content_type or 'application/octet-stream',
+                        'base64_data': file_base64
                     })
 
-                    logger.info(f"✅ Encoded attachment: {attachment.filename} ({attachment.size} bytes)")
+                    logger.info(f"Encoded attachment: {attachment.filename} ({attachment.size} bytes)")
                 except Exception as e:
-                    logger.error(f"❌ Failed to process attachment {attachment.filename}: {e}")
-                    await thread.send(f"❌ Failed to process `{attachment.filename}`: {str(e)}")
+                    logger.error(f"Failed to process attachment {attachment.filename}: {e}")
+                    await thread.send(f"Failed to process `{attachment.filename}`: {str(e)}")
 
-        # Send to FastAPI
+        # Send to TROISE AI (native protocol)
         data = {
             'type': 'message',
-            'user_id': str(message.author.id),
-            'conversation_id': thread_id,  # Discord thread ID = conversation ID
-            'message': content,
+            'content': content,
             'message_id': str(message.id),
-            'channel_id': str(thread.id),  # Thread ID for responses
-            'message_channel_id': str(message.channel.id),  # Where the message actually is (for reactions)
-            'guild_id': str(message.guild.id) if message.guild else None,
-            'attachments': attachments  # NEW: Include file attachments
+            'files': files,
+            'metadata': {
+                'user_id': str(message.author.id),
+                'conversation_id': thread_id,  # Discord thread ID = conversation ID
+                'channel_id': str(thread.id),  # Thread ID for responses
+                'message_channel_id': str(message.channel.id),  # Where the message is (for reactions)
+                'message_id': str(message.id),  # For reaction targeting
+                'guild_id': str(message.guild.id) if message.guild else None,
+            }
         }
 
         await self.ws_manager.send_message(data)
 
     async def handle_response(self, data: dict):
         """
-        Handle response from FastAPI.
+        Handle response from TROISE AI.
 
         Args:
             data: Response data dictionary
         """
         response_type = data.get('type')
 
-        if response_type == 'queued':
+        # TROISE AI native message types
+        if response_type == 'session_start':
+            # Connection established with session
+            session_id = data.get('session_id')
+            logger.info(f"Session started: {session_id}")
+
+        elif response_type == 'pong':
+            # Heartbeat response - no action needed
+            pass
+
+        elif response_type == 'routing':
+            # Skill/agent routing info (already routed by troise-ai)
+            logger.info(f"Routed to: {data.get('skill_or_agent')} ({data.get('routing_type')})")
+
+        elif response_type == 'queued':
             await self._handle_queued(data)
 
-        elif response_type == 'processing':
-            await self._handle_processing(data)
+        elif response_type == 'early_status':
+            # Early status indicator (triggers animation)
+            await self._handle_early_status(data)
 
-        # 'result' removed - now handled by 'stream_chunk' (unified)
+        elif response_type == 'stream':
+            # TROISE AI streaming partial chunk
+            await self._handle_stream(data)
 
-        elif response_type == 'failed':
-            await self._handle_failed(data)
+        elif response_type == 'stream_end':
+            # TROISE AI streaming complete
+            await self._handle_stream_end(data)
+
+        elif response_type == 'response':
+            # Complete non-streaming response
+            await self._handle_response_complete(data)
+
+        elif response_type == 'file':
+            # Artifact with base64_data
+            await self._handle_file_artifact(data)
+
+        elif response_type == 'file_suggestion':
+            # Low-confidence artifact suggestion
+            await self._handle_file_artifact(data, is_suggestion=True)
+
+        elif response_type == 'tool_start':
+            # Tool execution started
+            logger.debug(f"Tool started: {data.get('tool_name')}")
+
+        elif response_type == 'stream_fallback':
+            # Fallback to non-streaming mode
+            logger.info(f"Streaming fallback: {data.get('message')}")
+
+        elif response_type == 'question':
+            # Agent asking user a question - treat as normal Discord reply
+            await self._handle_question(data)
 
         elif response_type == 'error':
             await self._handle_error(data)
 
-        elif response_type == 'maintenance_warning':
-            await self._handle_maintenance_warning(data)
-
         elif response_type == 'cancelled':
-            logger.info(f"✅ Request {data.get('request_id')} cancelled")
-
-        elif response_type == 'summarize_response':
-            await self._handle_summarize_response(data)
-
-        elif response_type == 'configure_response':
-            await self._handle_configure_response(data)
-
-        elif response_type == 'stream_chunk':
-            await self._handle_stream_chunk(data)  # ✅ Unified handler for both streaming and non-streaming
-
-        # 'stream_complete' removed - artifacts now in final stream_chunk
-
-        elif response_type == 'early_status':
-            await self._handle_early_status(data)
+            logger.info(f"Request {data.get('request_id')} cancelled")
 
     async def _update_reaction(self, channel_id: str, message_id: str,
                                remove_emoji: str = None, add_emoji: str = None):
@@ -349,6 +433,515 @@ class MessageHandler:
         # Check for at least one alphanumeric character
         return bool(re.search(r'[a-zA-Z0-9]', content))
 
+    # =========================================================================
+    # TROISE AI Native Protocol Handlers
+    # =========================================================================
+
+    async def _handle_stream(self, data: dict):
+        """
+        Handle TROISE AI streaming partial chunk.
+
+        Accumulates content and updates Discord message with "..." indicator.
+        """
+        request_id = data.get('request_id')
+        channel_id = data.get('channel_id')
+        content = data.get('content', '')
+
+        if not channel_id:
+            logger.warning("Stream chunk missing channel_id")
+            return
+
+        channel_id = int(channel_id)
+
+        # Get thread
+        thread = self.bot.get_channel(channel_id)
+        if not thread:
+            logger.error(f"Thread {channel_id} not found for streaming")
+            return
+
+        # Initialize streaming buffers
+        if not hasattr(self.bot, 'streaming_buffers'):
+            self.bot.streaming_buffers = {}
+        if not hasattr(self.bot, 'streaming_messages'):
+            self.bot.streaming_messages = {}
+        if not hasattr(self.bot, 'stream_backoff'):
+            self.bot.stream_backoff = {}
+        if not hasattr(self.bot, 'stream_last_edit'):
+            self.bot.stream_last_edit = {}
+
+        # Use request_id as key if available, otherwise channel_id
+        buffer_key = request_id or str(channel_id)
+
+        # Get or create buffer state
+        if buffer_key not in self.bot.streaming_buffers:
+            self.bot.streaming_buffers[buffer_key] = {
+                'content': '',
+                'committed_length': 0,  # Track content already in finalized messages
+                'channel_id': channel_id,
+                'request_id': request_id,
+            }
+            # Use list to track multiple Discord messages per request
+            self.bot.streaming_messages[buffer_key] = []
+            logger.debug(f"Started streaming buffer for {buffer_key}")
+
+        state = self.bot.streaming_buffers[buffer_key]
+        state['content'] += content  # Accumulate tokens from TROISE AI
+
+        # Apply rate limit backoff if needed
+        backoff_delay, last_attempt = self.bot.stream_backoff.get(buffer_key, (0, 0))
+        if backoff_delay > 0:
+            time_since_last = time.time() - last_attempt
+            if time_since_last < backoff_delay:
+                wait_time = backoff_delay - time_since_last
+                logger.debug(f"Backing off for {wait_time:.2f}s due to rate limits")
+                await asyncio.sleep(wait_time)
+
+        self.bot.stream_backoff[buffer_key] = (backoff_delay, time.time())
+
+        # Check for early status message to reuse
+        early_msg = None
+        if hasattr(self.bot, 'early_status_messages'):
+            early_msg = self.bot.early_status_messages.get(channel_id)
+
+        try:
+            # Get message list for this request
+            messages = self.bot.streaming_messages.get(buffer_key, [])
+
+            # Cancel animation when first meaningful chunk arrives
+            if not messages:
+                await self.animation_manager.cancel(channel_id)
+                await asyncio.sleep(0.15)  # Let pending Discord edits complete
+
+            # Calculate pending (uncommitted) content
+            committed = state.get('committed_length', 0)
+            pending_content = state['content'][committed:]
+
+            # Validate content before Discord operations
+            if not self._has_meaningful_content(pending_content):
+                logger.debug(f"Not enough meaningful content yet: {len(pending_content)} chars")
+                return
+
+            # Check if we need to split (approaching threshold)
+            if len(pending_content) >= SPLIT_THRESHOLD and messages:
+                split_point, suffix, prefix = find_stream_split_point(
+                    pending_content,
+                    threshold=SPLIT_THRESHOLD,
+                    min_remaining=MIN_NEW_MESSAGE_CONTENT
+                )
+
+                if split_point >= MIN_NEW_MESSAGE_CONTENT:
+                    # Finalize current message
+                    finalize_content = pending_content[:split_point]
+                    if suffix:
+                        finalize_content += suffix  # Close code block
+
+                    current_msg = messages[-1]
+                    await self.rate_limiter.acquire()
+                    await current_msg.edit(content=finalize_content)
+
+                    # Update committed length
+                    state['committed_length'] = committed + split_point
+
+                    # Prepare content for new message
+                    new_pending = pending_content[split_point:]
+                    if prefix:
+                        new_pending = prefix + new_pending  # Reopen code block
+
+                    # Create new message
+                    display_new = new_pending.rstrip() + " ..."
+                    new_msg = await thread.send(display_new)
+                    messages.append(new_msg)
+                    self.bot.streaming_messages[buffer_key] = messages
+                    self.bot.stream_last_edit[buffer_key] = time.time()
+
+                    logger.debug(f"Split streaming message for {buffer_key}, now {len(messages)} messages")
+
+                    # Reset backoff on success
+                    self.bot.stream_backoff[buffer_key] = (0, time.time())
+                    return
+
+            # Normal streaming update (content below threshold or first message)
+            display_content = pending_content.rstrip() + " ..."
+
+            if not messages:
+                # First chunk with meaningful content
+                if early_msg:
+                    # Reuse early status message
+                    discord_msg = early_msg
+                    del self.bot.early_status_messages[channel_id]
+                    await self.rate_limiter.acquire()
+                    await discord_msg.edit(content=display_content)
+                    logger.debug(f"Updated early status message for {buffer_key}")
+                else:
+                    # Create new message
+                    discord_msg = await thread.send(display_content)
+                    logger.debug(f"Created streaming message for {buffer_key}")
+
+                messages.append(discord_msg)
+                self.bot.streaming_messages[buffer_key] = messages
+                self.bot.stream_last_edit[buffer_key] = time.time()
+            else:
+                # Subsequent chunks - throttle edits to 1 per second
+                last_edit = self.bot.stream_last_edit.get(buffer_key, 0)
+                elapsed_ms = (time.time() - last_edit) * 1000
+
+                if elapsed_ms < MIN_STREAM_INTERVAL_MS:
+                    # Too soon - skip this edit, content is buffered for next time
+                    return
+
+                current_msg = messages[-1]
+                await self.rate_limiter.acquire()
+                await current_msg.edit(content=display_content)
+                self.bot.stream_last_edit[buffer_key] = time.time()
+
+            # Reset backoff on success
+            self.bot.stream_backoff[buffer_key] = (0, time.time())
+
+        except discord.HTTPException as e:
+            if e.status == 429:
+                # Rate limited - apply exponential backoff
+                retry_after = getattr(e, 'retry_after', None)
+                if retry_after:
+                    new_backoff = float(retry_after)
+                else:
+                    current_backoff = self.bot.stream_backoff.get(buffer_key, (0, 0))[0]
+                    new_backoff = max(2.0, current_backoff * 2.0) if current_backoff > 0 else 2.0
+                self.bot.stream_backoff[buffer_key] = (new_backoff, time.time())
+                logger.warning(f"Rate limited, backing off to {new_backoff}s")
+            elif e.code == 50006:
+                logger.error(f"Empty message error: {repr(display_content[:50])}")
+            else:
+                logger.error(f"Discord HTTP error during streaming: {e}")
+        except Exception as e:
+            logger.error(f"Error handling stream for {buffer_key}: {e}")
+
+    async def _handle_stream_end(self, data: dict):
+        """
+        Handle TROISE AI streaming completion.
+
+        Finalizes message, splits if >2000 chars, cleans up buffers.
+        """
+        request_id = data.get('request_id')
+        channel_id = data.get('channel_id')
+        message_channel_id = data.get('message_channel_id', channel_id)
+        message_id = data.get('message_id')
+
+        if not channel_id:
+            logger.warning("stream_end missing channel_id")
+            return
+
+        channel_id = int(channel_id)
+
+        # Get thread
+        thread = self.bot.get_channel(channel_id)
+        if not thread:
+            logger.error(f"Thread {channel_id} not found for stream_end")
+            return
+
+        # Find buffer by request_id or channel_id
+        buffer_key = request_id or str(channel_id)
+
+        # Check streaming buffers
+        if not hasattr(self.bot, 'streaming_buffers'):
+            self.bot.streaming_buffers = {}
+
+        state = self.bot.streaming_buffers.get(buffer_key)
+        if not state:
+            logger.warning(f"No streaming buffer found for {buffer_key}")
+            return
+
+        full_content = state['content']
+        committed = state.get('committed_length', 0)
+        logger.debug(f"Stream completed for {buffer_key}: {len(full_content)} total chars, {committed} committed")
+
+        # Cancel animation
+        await self.animation_manager.cancel(channel_id)
+
+        # Get Discord messages list
+        if not hasattr(self.bot, 'streaming_messages'):
+            self.bot.streaming_messages = {}
+
+        messages = self.bot.streaming_messages.get(buffer_key, [])
+
+        # Calculate remaining uncommitted content
+        remaining_content = full_content[committed:]
+
+        try:
+            if messages:
+                last_msg = messages[-1]
+
+                if len(remaining_content) > 2000:
+                    # Split remaining content
+                    chunks = split_message(remaining_content)
+                    await self.rate_limiter.acquire()
+                    await last_msg.edit(content=chunks[0])
+
+                    # Send remaining chunks
+                    for chunk in chunks[1:]:
+                        await thread.send(chunk)
+
+                    logger.debug(f"Finalized with {len(messages)} messages + {len(chunks) - 1} overflow chunks")
+                elif remaining_content:
+                    # Finalize last message (remove "..." indicator)
+                    await self.rate_limiter.acquire()
+                    await last_msg.edit(content=remaining_content)
+                    logger.debug(f"Finalized stream with {len(messages)} message(s)")
+                else:
+                    # No remaining content - edge case, just log
+                    logger.debug(f"Stream ended with no remaining content, {len(messages)} message(s) already sent")
+            elif full_content:
+                # No messages exist yet (all chunks were too short) - send final content
+                if len(full_content) > 2000:
+                    chunks = split_message(full_content)
+                    for chunk in chunks:
+                        await thread.send(chunk)
+                else:
+                    await thread.send(full_content)
+
+            # Remove loading reaction from original message
+            if message_channel_id and message_id:
+                await self._update_reaction(
+                    str(message_channel_id),
+                    str(message_id),
+                    remove_emoji="⏳"
+                )
+
+        except discord.HTTPException as e:
+            logger.error(f"Discord error finalizing stream: {e}")
+        except Exception as e:
+            logger.error(f"Error finalizing stream for {buffer_key}: {e}")
+
+        # Clean up buffers
+        if buffer_key in self.bot.streaming_buffers:
+            del self.bot.streaming_buffers[buffer_key]
+        if buffer_key in self.bot.streaming_messages:
+            del self.bot.streaming_messages[buffer_key]
+        if buffer_key in self.bot.stream_backoff:
+            del self.bot.stream_backoff[buffer_key]
+        if hasattr(self.bot, 'stream_last_edit') and buffer_key in self.bot.stream_last_edit:
+            del self.bot.stream_last_edit[buffer_key]
+
+    async def _handle_response_complete(self, data: dict):
+        """
+        Handle complete non-streaming response from TROISE AI.
+        """
+        content = data.get('content', '')
+        channel_id = data.get('channel_id')
+        message_channel_id = data.get('message_channel_id', channel_id)
+        message_id = data.get('message_id')
+        part = data.get('part')
+        total_parts = data.get('total_parts')
+        artifacts = data.get('artifacts', [])
+
+        if not channel_id:
+            logger.warning("Response missing channel_id")
+            return
+
+        channel_id = int(channel_id)
+
+        # Get thread
+        thread = self.bot.get_channel(channel_id)
+        if not thread:
+            logger.error(f"Thread {channel_id} not found for response")
+            return
+
+        # Cancel any animation
+        await self.animation_manager.cancel(channel_id)
+
+        # Check for early status message to reuse
+        early_msg = None
+        if hasattr(self.bot, 'early_status_messages'):
+            early_msg = self.bot.early_status_messages.get(channel_id)
+            if early_msg:
+                del self.bot.early_status_messages[channel_id]
+
+        try:
+            if not content:
+                logger.warning("Response has no content")
+                return
+
+            # Handle multi-part responses (already split by TROISE AI)
+            if part and total_parts:
+                prefix = f"**[{part}/{total_parts}]** " if part > 1 else ""
+                display_content = prefix + content
+            else:
+                display_content = content
+
+            # Split if still too long (shouldn't happen with TROISE AI formatting)
+            if len(display_content) > 2000:
+                chunks = split_message(display_content)
+                if early_msg:
+                    await self.rate_limiter.acquire()
+                    await early_msg.edit(content=chunks[0])
+                    for chunk in chunks[1:]:
+                        await thread.send(chunk)
+                else:
+                    for chunk in chunks:
+                        await thread.send(chunk)
+            else:
+                if early_msg:
+                    await self.rate_limiter.acquire()
+                    await early_msg.edit(content=display_content)
+                else:
+                    await thread.send(display_content)
+
+            # Remove loading reaction from original message (only on last part)
+            if message_channel_id and message_id and (not part or part == total_parts):
+                await self._update_reaction(
+                    str(message_channel_id),
+                    str(message_id),
+                    remove_emoji="⏳"
+                )
+
+            # Handle artifacts
+            for artifact in artifacts:
+                await self._handle_file_artifact({'file': artifact, 'channel_id': channel_id})
+
+        except discord.HTTPException as e:
+            logger.error(f"Discord error sending response: {e}")
+        except Exception as e:
+            logger.error(f"Error handling response: {e}")
+
+    async def _handle_question(self, data: dict):
+        """
+        Handle question from agent - displays as normal Discord message.
+
+        The user's next message in the thread becomes the answer,
+        which is naturally captured in conversation history.
+        """
+        question = data.get('question', '')
+        options = data.get('options', [])
+        channel_id = data.get('channel_id')
+        message_channel_id = data.get('message_channel_id', channel_id)
+        message_id = data.get('message_id')
+
+        if not channel_id:
+            logger.warning("Question missing channel_id")
+            return
+
+        channel_id = int(channel_id)
+
+        # Get thread
+        thread = self.bot.get_channel(channel_id)
+        if not thread:
+            logger.error(f"Thread {channel_id} not found for question")
+            return
+
+        # Cancel any animation
+        await self.animation_manager.cancel(channel_id)
+
+        # Check for early status message to reuse
+        early_msg = None
+        if hasattr(self.bot, 'early_status_messages'):
+            early_msg = self.bot.early_status_messages.get(channel_id)
+            if early_msg:
+                del self.bot.early_status_messages[channel_id]
+
+        try:
+            # Format the question with options if provided
+            if options:
+                options_text = "\n".join(f"• {opt}" for opt in options)
+                display_content = f"{question}\n\n{options_text}"
+            else:
+                display_content = question
+
+            if not display_content:
+                logger.warning("Question has no content")
+                return
+
+            # Split if too long
+            if len(display_content) > 2000:
+                chunks = split_message(display_content)
+                if early_msg:
+                    await self.rate_limiter.acquire()
+                    await early_msg.edit(content=chunks[0])
+                    for chunk in chunks[1:]:
+                        await thread.send(chunk)
+                else:
+                    for chunk in chunks:
+                        await thread.send(chunk)
+            else:
+                if early_msg:
+                    await self.rate_limiter.acquire()
+                    await early_msg.edit(content=display_content)
+                else:
+                    await thread.send(display_content)
+
+            # Remove loading reaction from original message
+            if message_channel_id and message_id:
+                await self._update_reaction(
+                    str(message_channel_id),
+                    str(message_id),
+                    remove_emoji="⏳"
+                )
+
+            logger.info(f"Displayed agent question in thread {channel_id}")
+
+        except discord.HTTPException as e:
+            logger.error(f"Discord error sending question: {e}")
+        except Exception as e:
+            logger.error(f"Error handling question: {e}")
+
+    async def _handle_file_artifact(self, data: dict, is_suggestion: bool = False):
+        """
+        Handle artifact with base64_data from TROISE AI.
+
+        Args:
+            data: Message data containing file info
+            is_suggestion: If True, treat as low-confidence suggestion
+        """
+        # File info may be in 'file' key or directly in data
+        file_info = data.get('file', data)
+        channel_id = data.get('channel_id')
+
+        filename = file_info.get('filename')
+        base64_data = file_info.get('base64_data')
+        mimetype = file_info.get('mimetype', 'application/octet-stream')
+
+        if not channel_id:
+            logger.warning("File artifact missing channel_id")
+            return
+
+        channel_id = int(channel_id)
+
+        if not filename or not base64_data:
+            logger.warning(f"File artifact missing required fields: filename={filename}, has_data={bool(base64_data)}")
+            return
+
+        # Get thread
+        thread = self.bot.get_channel(channel_id)
+        if not thread:
+            logger.error(f"Thread {channel_id} not found for artifact")
+            return
+
+        try:
+            # Decode base64 data
+            file_bytes = base64.b64decode(base64_data)
+
+            # Create Discord file object
+            discord_file = discord.File(
+                fp=io.BytesIO(file_bytes),
+                filename=filename
+            )
+
+            # Send with appropriate label
+            if is_suggestion:
+                label = f"💡 **Suggested: {filename}** _(AI-generated, may need review)_"
+            else:
+                label = f"📎 **{filename}**"
+
+            await thread.send(label, file=discord_file)
+
+            logger.info(f"Uploaded artifact: {filename} ({len(file_bytes)} bytes)")
+
+        except Exception as e:
+            logger.error(f"Failed to upload artifact {filename}: {e}")
+            await thread.send(f"❌ Failed to upload artifact `{filename}`: {str(e)}")
+
+    # =========================================================================
+    # Legacy Handler (fastapi-service compatibility - can be removed later)
+    # =========================================================================
+
     async def _handle_stream_chunk(self, data: dict):
         """Handle streaming chunk update."""
         request_id = data.get('request_id')
@@ -444,6 +1037,7 @@ class MessageHandler:
 
                     # Wrap Discord API call in try-except for additional safety
                     try:
+                        await self.rate_limiter.acquire()
                         await discord_msg.edit(content=display_content)
                         logger.debug(f"📡 Updated early status message for request {request_id}")
                     except discord.errors.HTTPException as e:
@@ -545,6 +1139,7 @@ class MessageHandler:
                     display_content = display_content[:1900] + "\n\n... _(message too long, will send in multiple chunks)_"
 
                 try:
+                    await self.rate_limiter.acquire()
                     await discord_msg.edit(content=display_content)
                 except discord.errors.HTTPException as e:
                     if e.code == 50006:
@@ -585,6 +1180,7 @@ class MessageHandler:
                     chunks = split_message(content)
 
                     # Update first message with first chunk
+                    await self.rate_limiter.acquire()
                     await discord_msg.edit(content=chunks[0])
 
                     # Send remaining chunks

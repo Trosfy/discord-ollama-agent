@@ -277,7 +277,7 @@ async def lifespan(app: FastAPI):
                 )
                 logger.warning("   To restore performance profile:")
                 logger.warning("   1. Check SGLang: docker logs trollama-sglang")
-                logger.warning("   2. Restart SGLang: ./scripts/model_management/stop_sglang.sh && ./scripts/model_management/start_sglang.sh")
+                logger.warning("   2. Restart SGLang: ./scripts/model_management/sglang/stop.sh && ./scripts/model_management/sglang/start.sh")
                 logger.warning("   3. Restart FastAPI: docker compose restart fastapi-service")
 
                 # GRACEFUL DEGRADATION: Load conservative profile instead

@@ -247,14 +247,14 @@ class SystemMetricsService:
 
     async def fetch_queue_stats(self) -> dict:
         """
-        Fetch queue statistics from fastapi-service.
+        Fetch queue statistics from TROISE AI.
 
         Returns dict with:
         - size: int
         """
         try:
             response = await self.http_client.get(
-                f"{settings.FASTAPI_URL}/health"
+                f"{settings.TROISE_AI_URL}/health"
             )
             response.raise_for_status()
             health_data = response.json()

@@ -6,8 +6,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Admin service configuration."""
 
-    # FastAPI Service URLs
-    FASTAPI_URL: str = os.getenv("FASTAPI_URL", "http://fastapi-service:8000")
+    # TROISE AI Service URL
+    TROISE_AI_URL: str = os.getenv("TROISE_AI_URL", "http://troise-ai:8000")
 
     # JWT Authentication
     JWT_SECRET: str = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-me")

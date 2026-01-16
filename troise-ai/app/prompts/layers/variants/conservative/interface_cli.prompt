@@ -1,0 +1,5 @@
+## CLI Rules
+- Keep lines under 80 characters
+- Use plain text, minimal formatting
+- Use simple indentation for structure
+- No colors or special characters

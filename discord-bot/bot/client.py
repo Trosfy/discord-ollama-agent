@@ -17,7 +17,7 @@ logger = logging_client.setup_logger('discord-bot')
 
 
 class DiscordBotClient(commands.Bot):
-    """Discord bot with WebSocket connection to FastAPI."""
+    """Discord bot with WebSocket connection to TROISE AI."""
 
     def __init__(self, settings: BotSettings):
         intents = discord.Intents.default()
@@ -27,7 +27,7 @@ class DiscordBotClient(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
         self.settings = settings
-        self.ws_manager = WebSocketManager(settings.FASTAPI_WS_URL)
+        self.ws_manager = WebSocketManager(settings.TROISE_WS_URL)
         self.message_handler = MessageHandler(self, self.ws_manager)
 
         # Track pending requests
@@ -348,7 +348,7 @@ class DiscordBotClient(commands.Bot):
 
     async def setup_hook(self):
         """Setup hook called when bot starts."""
-        # Connect to FastAPI WebSocket
+        # Connect to TROISE AI WebSocket
         await self.ws_manager.connect(str(self.user.id))
 
         # Start listening for responses
@@ -358,12 +358,12 @@ class DiscordBotClient(commands.Bot):
 
         # Sync slash commands globally
         await self.tree.sync()
-        logger.info("✅ Slash commands synced globally")
+        logger.info("Slash commands synced globally")
 
     async def on_ready(self):
         """Called when bot is ready."""
-        logger.info(f"✅ Logged in as {self.user.name} ({self.user.id})")
-        logger.info(f"✅ Connected to FastAPI at {self.settings.FASTAPI_WS_URL}")
+        logger.info(f"Logged in as {self.user.name} ({self.user.id})")
+        logger.info(f"Connected to TROISE AI at {self.settings.TROISE_WS_URL}")
 
     async def on_message(self, message: discord.Message):
         """

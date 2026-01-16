@@ -1,0 +1,164 @@
+# TROISE AI Configuration
+
+# Active profile determines model selection strategy
+# Options: conservative, balanced, performance
+active_profile: balanced
+
+# Backend configurations
+# Note: Environment variables (OLLAMA_HOST, SGLANG_ENDPOINT, VLLM_HOST) override these hosts
+backends:
+  ollama:
+    type: ollama
+    host: http://host.docker.internal:11434
+    options:
+      num_ctx: 32768
+
+  sglang:
+    type: sglang
+    host: http://host.docker.internal:30000
+    dgx_script: /home/trosfy/scripts/sglang-start.sh
+    options:
+      max_new_tokens: 4096
+
+  vllm:
+    type: vllm
+    host: http://host.docker.internal:8000
+    options:
+      max_model_len: 32768
+
+# DGX server configuration for remote model serving
+dgx:
+  host: 192.168.1.100
+  user: trosfy
+  ssh_key: /home/trosfy/.ssh/dgx_spark
+
+# Obsidian vault path for brain/knowledge base
+vault_path: /home/trosfy/obsidian-vault
+
+# Plugin directories to scan
+plugins:
+  - app/plugins
+
+# Logging configuration
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# WebSocket settings
+websocket:
+  ping_interval: 30
+  ping_timeout: 10
+
+# VRAM management settings
+vram:
+  # Auto-detect from nvidia-smi, or specify manually (GB)
+  # total: 48
+  # Reserve buffer for system (GB)
+  reserve_gb: 2
+  # Health check interval (seconds)
+  health_check_interval: 60
+
+# RAG (Retrieval-Augmented Generation) settings for web_fetch
+rag:
+  # === Chunking Configuration ===
+  chunk_size: 1000              # Target tokens per chunk
+  chunk_overlap: 400            # Token overlap between chunks (40%)
+  tokenizer_encoding: cl100k_base  # cl100k_base | o200k_base | p50k_base | r50k_base
+  separators:                   # Text split boundaries (in priority order)
+    - "\n\n"                    # Paragraph breaks
+    - "\n"                      # Line breaks
+    - ". "                      # Sentences
+    - " "                       # Words
+    - ""                        # Characters (fallback)
+
+  # === Retrieval Configuration ===
+  vector_top_k: 7               # Max chunks to retrieve
+  max_fetch_tokens: 7000        # Token budget per fetch response
+
+  # === Cache Configuration ===
+  web_cache_ttl_hours: 2        # Default cache duration (hours)
+  ttl_by_domain:                # Domain-specific TTL overrides (hours)
+    docs.python.org: 168           # 7 days (stable docs)
+    developer.mozilla.org: 168     # 7 days
+    github.com: 24                 # 1 day
+    news.ycombinator.com: 1        # 1 hour (news)
+
+  # === HTTP Fetch Configuration ===
+  fetch:
+    timeout_seconds: 30         # HTTP request timeout
+    max_content_bytes: 5242880  # 5MB max page size
+    max_redirects: 5            # Max redirect follows
+    user_agent: "TroiseAI/1.0 (RAG Fetcher)"
+
+  # === HTML Parsing Configuration ===
+  parsing:
+    remove_tags:                # HTML elements to strip
+      - script
+      - style
+      - nav
+      - footer
+      - header
+      - aside
+      - noscript
+      - iframe
+    extract_title: true         # Extract <title> for metadata
+    preserve_links: false       # Keep href text (future feature)
+
+# Queue configuration (centralized request processing)
+queue:
+  # Number of concurrent workers processing requests
+  worker_count: 3
+
+  # Timeout settings (seconds)
+  default_timeout_seconds: 300    # Default for unknown types
+  skill_timeout_seconds: 120      # Skills are typically fast
+  agent_timeout_seconds: 600      # Agents may take longer (tool use)
+
+  # Visibility timeout - mark as stuck if not completed
+  visibility_timeout_seconds: 300
+  visibility_check_interval_seconds: 30  # How often to check for stuck requests
+
+  # Retry settings
+  max_retries: 2                  # Max retry attempts before permanent failure
+
+  # How long to keep completed results before cleanup
+  result_ttl_seconds: 300
+
+  # Alert if queue depth exceeds this threshold
+  alert_queue_depth: 10
+
+# Circuit breaker configuration (failure handling)
+circuit_breaker:
+  # Single queue-level breaker (overall system health)
+  # Note: No per-type breakers since agents can invoke skills during execution
+  failure_threshold: 10           # Consecutive failures before OPEN
+  success_threshold: 5            # Successes in HALF_OPEN before CLOSED
+  open_timeout_seconds: 60        # Time in OPEN before testing recovery
+
+  # Rate-based triggering
+  failure_rate_threshold: 0.5     # 50% failure rate triggers OPEN
+  sample_window_seconds: 60       # Window for rate calculation
+
+  # Half-open settings
+  half_open_max_requests: 3       # Max requests to test in HALF_OPEN
+
+# Tools configuration
+tools:
+  # Tools available to ALL agents automatically
+  # ask_user removed - agents that need it add explicitly (e.g., agentic_code)
+  universal_tools:
+    - skill_gateway
+    - remember
+    - recall
+
+# Session configuration
+session:
+  # Max messages to load when resuming a session
+  max_history_messages: 100
+  # Max conversation turns to include in LLM context per request
+  max_history_turns: 10
+
+# Skills configuration
+skills:
+  # Max recursion depth for skill-to-skill calls (via agents)
+  max_skill_depth: 2

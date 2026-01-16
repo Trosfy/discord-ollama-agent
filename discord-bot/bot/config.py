@@ -7,7 +7,7 @@ class BotSettings(BaseSettings):
     """Bot configuration with environment variable support."""
 
     DISCORD_TOKEN: str
-    FASTAPI_WS_URL: str = "ws://fastapi-service:8000/ws/discord"
+    TROISE_WS_URL: str = "ws://troise-ai:8000"  # Base URL for TROISE AI WebSocket
 
     # Admin Service Settings
     ADMIN_SERVICE_URL: str = "http://admin-service:8000"

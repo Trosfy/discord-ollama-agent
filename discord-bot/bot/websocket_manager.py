@@ -13,58 +13,65 @@ logger = logging_client.setup_logger('discord-bot')
 
 
 class WebSocketManager:
-    """Manages WebSocket connection to FastAPI."""
+    """Manages WebSocket connection to TROISE AI."""
 
-    def __init__(self, fastapi_url: str):
-        self.fastapi_url = fastapi_url
+    def __init__(self, troise_url: str):
+        """Initialize WebSocket manager.
+
+        Args:
+            troise_url: Base WebSocket URL for TROISE AI (e.g., ws://troise-ai:8000)
+        """
+        self.troise_url = troise_url
         self.websocket: Optional[websockets.WebSocketClientProtocol] = None
         self.connected = False
         self.reconnect_delay = 5
         self.bot_id: Optional[str] = None  # Store for reconnection
+        self.session_id: Optional[str] = None  # TROISE AI session ID
         self.max_reconnect_delay = 60  # Cap exponential backoff
         self.ping_task: Optional[asyncio.Task] = None  # Heartbeat task
 
     async def connect(self, bot_id: str):
         """
-        Connect to FastAPI WebSocket.
+        Connect to TROISE AI WebSocket.
 
         Args:
-            bot_id: Bot identifier for registration
+            bot_id: Bot identifier (used as user_id for TROISE AI)
         """
         # Store bot_id for reconnection
         self.bot_id = bot_id
 
+        # Build URL with query parameters (TROISE AI native protocol)
+        ws_url = f"{self.troise_url}/ws/chat?interface=discord&user_id={bot_id}"
+
         try:
             # Connect with longer ping interval (60s) and timeout (120s)
             self.websocket = await websockets.connect(
-                self.fastapi_url,
+                ws_url,
                 ping_interval=60,
                 ping_timeout=120
             )
 
-            # Send identification
-            await self.websocket.send(json.dumps({'bot_id': bot_id}))
-
-            # Wait for acknowledgment
+            # Wait for session_start message (TROISE AI protocol)
             response = await self.websocket.recv()
             data = json.loads(response)
 
-            if data.get('type') == 'connected':
+            if data.get('type') == 'session_start':
                 self.connected = True
-                logger.info(f"✅ WebSocket connected to FastAPI")
+                self.session_id = data.get('session_id')
+                logger.info(f"WebSocket connected to TROISE AI (session: {self.session_id})")
 
                 # Start heartbeat task
                 self._start_heartbeat()
             else:
-                raise Exception("Failed to connect to FastAPI")
+                raise Exception(f"Unexpected handshake response: {data.get('type')}")
 
         except Exception as e:
-            logger.error(f"❌ WebSocket connection error: {e}")
+            logger.error(f"WebSocket connection error: {e}")
             await asyncio.sleep(self.reconnect_delay)
             await self.connect(bot_id)
 
     async def disconnect(self):
-        """Disconnect from FastAPI WebSocket."""
+        """Disconnect from TROISE AI WebSocket."""
         self.connected = False
 
         # Stop heartbeat task
@@ -81,7 +88,7 @@ class WebSocketManager:
 
     async def send_message(self, data: dict):
         """
-        Send message request to FastAPI.
+        Send message request to TROISE AI.
 
         Args:
             data: Message data dictionary
@@ -90,13 +97,13 @@ class WebSocketManager:
             Exception: If not connected
         """
         if not self.connected or not self.websocket:
-            raise Exception("Not connected to FastAPI")
+            raise Exception("Not connected to TROISE AI")
 
         await self.websocket.send(json.dumps(data))
 
     async def cancel_request(self, request_id: str):
         """
-        Send cancellation request to FastAPI.
+        Send cancellation request to TROISE AI.
 
         Args:
             request_id: Request ID to cancel
@@ -111,7 +118,7 @@ class WebSocketManager:
 
     async def listen_for_responses(self, callback: Callable):
         """
-        Listen for responses from FastAPI.
+        Listen for responses from TROISE AI.
 
         Args:
             callback: Async function to call with received messages

@@ -46,7 +46,7 @@ class Container(containers.DeclarativeContainer):
 
     vram_client = providers.Singleton(
         VRAMClient,
-        base_url=settings.FASTAPI_URL,
+        base_url=settings.TROISE_AI_URL,
         api_key=settings.INTERNAL_API_KEY
     )
 
@@ -139,7 +139,7 @@ def init_container() -> Container:
         # Container is now ready to use
     """
     container.config.from_dict({
-        "fastapi_url": settings.FASTAPI_URL,
+        "troise_ai_url": settings.TROISE_AI_URL,
         "internal_api_key": settings.INTERNAL_API_KEY,
         "webhook_url": settings.DISCORD_ADMIN_WEBHOOK_URL
     })

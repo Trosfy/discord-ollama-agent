@@ -99,6 +99,121 @@ def _split_long_line(line: str, max_length: int) -> List[str]:
     return chunks if chunks else [line[:max_length]]  # Fallback for single long word
 
 
+def track_code_block_state(content: str) -> Tuple[bool, Optional[str]]:
+    """
+    Determine if content ends inside an unclosed code block.
+
+    Tracks ``` markers to determine if we're currently inside a code block.
+    Handles code blocks with and without language specifiers.
+
+    Args:
+        content: The content to analyze
+
+    Returns:
+        Tuple of (is_in_code_block, language)
+        - is_in_code_block: True if content ends inside an unclosed code block
+        - language: The code block language (e.g., 'python', '') or None if not in block
+    """
+    import re
+
+    # Find all code block markers (``` optionally followed by language)
+    # This pattern matches ``` at the start of a line or after whitespace
+    pattern = re.compile(r'```(\w*)')
+    matches = list(pattern.finditer(content))
+
+    # Track open/close state
+    is_open = False
+    language = None
+
+    for match in matches:
+        if is_open:
+            # This closes the block (``` closes any open block)
+            is_open = False
+            language = None
+        else:
+            # This opens a block
+            is_open = True
+            language = match.group(1) or ''  # Empty string for plain ```
+
+    return (is_open, language)
+
+
+def find_stream_split_point(
+    content: str,
+    threshold: int = 1800,
+    min_remaining: int = 100
+) -> Tuple[int, Optional[str], Optional[str]]:
+    """
+    Find optimal point to split streaming content for Discord messages.
+
+    Priorities for split points:
+    1. Paragraph boundary (double newline)
+    2. Line boundary (single newline)
+    3. Sentence boundary (. followed by space)
+    4. Word boundary (space)
+    5. Hard split at threshold (fallback)
+
+    Handles code blocks by adding close/open markers to maintain valid markdown.
+
+    Args:
+        content: Content to find split point in
+        threshold: Target character count for split (default 1800)
+        min_remaining: Minimum content that must remain after split (default 100)
+
+    Returns:
+        Tuple of (split_index, suffix_for_current, prefix_for_next)
+        - split_index: Where to split (0 if no valid split possible)
+        - suffix: String to append to current message (e.g., "\\n```" to close code block)
+        - prefix: String to prepend to next message (e.g., "```python\\n" to reopen)
+    """
+    if len(content) < threshold + min_remaining:
+        return (0, None, None)  # Not enough content to warrant a split
+
+    # Search window: from threshold-200 to threshold
+    # This gives us room to find natural break points
+    search_start = max(0, threshold - 200)
+    search_end = threshold
+    search_region = content[search_start:search_end]
+
+    split_at = None
+
+    # Priority 1: Paragraph boundary (double newline)
+    para_idx = search_region.rfind('\n\n')
+    if para_idx != -1:
+        split_at = search_start + para_idx + 2  # After the double newline
+    else:
+        # Priority 2: Line boundary (single newline)
+        line_idx = search_region.rfind('\n')
+        if line_idx != -1:
+            split_at = search_start + line_idx + 1  # After the newline
+        else:
+            # Priority 3: Sentence boundary (period followed by space)
+            sentence_idx = search_region.rfind('. ')
+            if sentence_idx != -1:
+                split_at = search_start + sentence_idx + 2  # After the ". "
+            else:
+                # Priority 4: Word boundary (space)
+                space_idx = search_region.rfind(' ')
+                if space_idx != -1:
+                    split_at = search_start + space_idx + 1  # After the space
+                else:
+                    # Priority 5: Hard split at threshold
+                    split_at = threshold
+
+    # Check code block state at the split point
+    is_in_block, language = track_code_block_state(content[:split_at])
+
+    suffix = None
+    prefix = None
+
+    if is_in_block:
+        # Need to close the code block in current message and reopen in next
+        suffix = '\n```'
+        prefix = f'```{language}\n' if language else '```\n'
+
+    return (split_at, suffix, prefix)
+
+
 def validate_attachment(attachment: discord.Attachment) -> bool:
     """
     Validate file attachment size and type using config settings.

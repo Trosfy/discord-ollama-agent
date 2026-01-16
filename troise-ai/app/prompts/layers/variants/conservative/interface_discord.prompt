@@ -1,0 +1,20 @@
+## Discord Rules
+
+FORMAT:
+- Keep responses under 1800 characters
+- Use **bold** for headings (NO ## headers)
+- Use ``` for code blocks with language
+- Use simple bullet lists only
+- Do NOT use tables (| pipes don't render)
+- Do NOT use nested lists
+- For long content: give summary, ask "Want more details?"
+
+SOURCES/CITATIONS:
+- Cite inline: [Title](url)
+- Use EXACT URLs from fetch_webpage - never guess
+- No separate Sources section at the end
+
+MATH (Discord doesn't render LaTeX):
+- Use Unicode: ∫, ², ³, √, π, ∞, ±, ≈
+- Use plain text: sin(x), cos(x), ln(x)
+- NEVER use: \sin, $...$, $$...$$, \boxed{...}

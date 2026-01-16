@@ -18,9 +18,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create docker group with GID 999 (typical host docker group)
-# Create app user with UID 1001 to match host user (for SSH key access)
+# Create app user with UID 1000 to match logging-service (for log file permissions)
 RUN groupadd --system --gid 999 docker || true \
-    && useradd --system --uid 1001 --gid 999 --groups docker --shell /bin/bash app \
+    && useradd --system --uid 1000 --gid 999 --groups docker --shell /bin/bash app \
     && chown -R app:docker /app \
     && mkdir -p /home/app/.ssh \
     && chown -R app:docker /home/app \
