@@ -90,6 +90,12 @@ class OllamaClient(IBackendClient):
     Models are loaded on-demand and can be kept in memory for a specified duration.
     """
 
+    # Timeout for model loading (large models can take minutes to load)
+    LOAD_TIMEOUT_SECONDS = 300  # 5 minutes
+    # Retry configuration
+    MAX_RETRIES = 3
+    RETRY_DELAY_SECONDS = 5  # Base delay, doubles each retry
+
     def __init__(self, host: str):
         """
         Initialize the Ollama client.
@@ -116,7 +122,7 @@ class OllamaClient(IBackendClient):
         Load a model into Ollama by sending a generate request with keep_alive.
 
         This triggers Ollama to load the model into memory and keep it loaded
-        for the specified duration.
+        for the specified duration. Includes retry logic for transient failures.
 
         Args:
             model_id: The model identifier to load.
@@ -125,30 +131,55 @@ class OllamaClient(IBackendClient):
         Returns:
             True if the model was loaded successfully, False otherwise.
         """
-        try:
-            session = await self._get_session()
-            url = f"{self.host}/api/generate"
-            payload = {
-                "model": model_id,
-                "prompt": "",
-                "keep_alive": keep_alive
-            }
+        import asyncio
 
-            async with session.post(url, json=payload) as response:
-                if response.status == 200:
-                    logger.info(f"Model '{model_id}' loaded successfully with keep_alive={keep_alive}")
-                    return True
-                else:
-                    error_text = await response.text()
-                    logger.error(f"Failed to load model '{model_id}': {response.status} - {error_text}")
-                    return False
+        last_error = None
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                session = await self._get_session()
+                url = f"{self.host}/api/generate"
+                payload = {
+                    "model": model_id,
+                    "prompt": "",
+                    "keep_alive": keep_alive
+                }
 
-        except aiohttp.ClientError as e:
-            logger.error(f"Connection error loading model '{model_id}': {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error loading model '{model_id}': {e}")
-            return False
+                # Use longer timeout for model loading (can take minutes for large models)
+                timeout = aiohttp.ClientTimeout(total=self.LOAD_TIMEOUT_SECONDS)
+
+                if attempt > 0:
+                    logger.info(f"Retrying load for '{model_id}' (attempt {attempt + 1}/{self.MAX_RETRIES})")
+
+                async with session.post(url, json=payload, timeout=timeout) as response:
+                    if response.status == 200:
+                        logger.info(f"Model '{model_id}' loaded successfully with keep_alive={keep_alive}")
+                        return True
+                    else:
+                        error_text = await response.text()
+                        last_error = f"HTTP {response.status} - {error_text}"
+                        logger.warning(f"Load attempt {attempt + 1} failed for '{model_id}': {last_error}")
+
+            except asyncio.TimeoutError:
+                last_error = f"Timeout after {self.LOAD_TIMEOUT_SECONDS}s"
+                logger.warning(f"Load attempt {attempt + 1} for '{model_id}' timed out")
+
+            except aiohttp.ClientError as e:
+                last_error = f"Connection error: {e}"
+                logger.warning(f"Load attempt {attempt + 1} for '{model_id}' failed: {last_error}")
+
+            except Exception as e:
+                last_error = f"Unexpected error: {e}"
+                logger.warning(f"Load attempt {attempt + 1} for '{model_id}' failed: {last_error}")
+
+            # Wait before retry with exponential backoff
+            if attempt < self.MAX_RETRIES - 1:
+                delay = self.RETRY_DELAY_SECONDS * (2 ** attempt)
+                logger.debug(f"Waiting {delay}s before retry...")
+                await asyncio.sleep(delay)
+
+        # All retries exhausted
+        logger.error(f"Failed to load model '{model_id}' after {self.MAX_RETRIES} attempts: {last_error}")
+        return False
 
     async def unload_model(self, model_id: str) -> bool:
         """
@@ -162,6 +193,8 @@ class OllamaClient(IBackendClient):
         Returns:
             True if the model was unloaded successfully, False otherwise.
         """
+        import asyncio
+
         try:
             session = await self._get_session()
             url = f"{self.host}/api/generate"
@@ -171,7 +204,10 @@ class OllamaClient(IBackendClient):
                 "keep_alive": "0"
             }
 
-            async with session.post(url, json=payload) as response:
+            # Timeout for unload (should be quick, but allow time for large models)
+            timeout = aiohttp.ClientTimeout(total=60)
+
+            async with session.post(url, json=payload, timeout=timeout) as response:
                 if response.status == 200:
                     logger.info(f"Model '{model_id}' unloaded successfully")
                     return True
@@ -180,6 +216,9 @@ class OllamaClient(IBackendClient):
                     logger.error(f"Failed to unload model '{model_id}': {response.status} - {error_text}")
                     return False
 
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout unloading model '{model_id}'")
+            return False
         except aiohttp.ClientError as e:
             logger.error(f"Connection error unloading model '{model_id}': {e}")
             return False

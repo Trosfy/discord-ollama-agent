@@ -9,8 +9,8 @@ dependencies = [
     "uvicorn[standard]>=0.32.0",
     "websockets>=13.0",
 
-    # Strands Agents (agent loop, tools, multi-agent)
-    "strands-agents>=0.1.0",
+    # Strands Agents (agent loop, tools, multi-agent, swarm)
+    "strands-agents>=1.0.0",
 
     # Strands model backends
     "ollama>=0.4.0",

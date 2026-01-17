@@ -71,6 +71,7 @@ class PromptComposer:
         interface: str,
         profile: Optional[str] = None,
         user_profile: Optional["UserProfile"] = None,
+        graph_domain: Optional[str] = None,
         **format_vars,
     ) -> str:
         """Compose complete agent system prompt.
@@ -91,6 +92,7 @@ class PromptComposer:
             interface: Interface type ('discord', 'web', 'cli', 'api')
             profile: Profile for prompt variant ('conservative', 'balanced', 'performance')
             user_profile: Optional user profile for personalization
+            graph_domain: Optional graph domain for nested variants ('code', 'research', 'braindump')
             **format_vars: Additional template variables
 
         Returns:
@@ -98,15 +100,19 @@ class PromptComposer:
         """
         effective_profile = self._get_profile(profile)
 
-        # Layer 1: Agent identity
+        # Layer 1: Agent identity (with graph_domain support for nested variants)
         try:
             agent_prompt = self._registry.get_prompt(
                 category="agents",
                 name=agent_name,
                 profile=effective_profile,
+                graph_domain=graph_domain,
             )
         except FileNotFoundError:
-            logger.error(f"Agent prompt not found: {agent_name}, profile={effective_profile}")
+            logger.error(
+                f"Agent prompt not found: {agent_name}, profile={effective_profile}, "
+                f"graph_domain={graph_domain}"
+            )
             raise
 
         # Layer 2: Interface formatting

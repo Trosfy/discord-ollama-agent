@@ -56,6 +56,7 @@ class ToolFactory:
         self,
         agent_name: str,
         context: ExecutionContext,
+        tool_names: Optional[List[str]] = None,
     ) -> List[Any]:
         """
         Create Strands-compatible tools for an agent.
@@ -67,14 +68,27 @@ class ToolFactory:
         Args:
             agent_name: Name of the agent to create tools for.
             context: Execution context to inject into tools.
+            tool_names: Optional explicit tool list. If provided, overrides
+                       the agent's configured tools from registry. Used by
+                       graph YAML to specify per-node tool lists.
 
         Returns:
             List of Strands tools (decorated functions).
         """
-        # Clear previous tools (new execution context)
-        self._created_tools = []
+        # Note: Tools accumulate in _created_tools across all calls.
+        # cleanup() clears the list after graph execution completes.
 
-        tool_plugins = self._registry.get_tools_for_agent(agent_name)
+        if tool_names is not None:
+            # Use explicit tool list (from graph YAML override)
+            tool_plugins = [
+                self._registry.get_tool(name)
+                for name in tool_names
+                if self._registry.get_tool(name)
+            ]
+            logger.debug(f"Using tool override for '{agent_name}': {tool_names}")
+        else:
+            # Fall back to agent's configured tools (from plugin)
+            tool_plugins = self._registry.get_tools_for_agent(agent_name)
 
         if not tool_plugins:
             logger.debug(f"No tools configured for agent '{agent_name}'")
@@ -112,6 +126,37 @@ class ToolFactory:
             return None
 
         return self._create_tool(plugin, context)
+
+    def create_tools(
+        self,
+        tool_names: List[str],
+        context: ExecutionContext,
+    ) -> List[Any]:
+        """
+        Create Strands-compatible tools from a list of tool names.
+
+        Used by graph executor to create tools for all nodes at once.
+
+        Args:
+            tool_names: List of tool names to create.
+            context: Execution context to inject into tools.
+
+        Returns:
+            List of Strands tools (decorated functions).
+        """
+        # Note: Tools accumulate in _created_tools across all calls.
+        # cleanup() clears the list after graph execution completes.
+
+        tools = []
+        created_names = []
+        for tool_name in tool_names:
+            tool = self.create_tool(tool_name, context)
+            if tool:
+                tools.append(tool)
+                created_names.append(tool_name)
+
+        logger.info(f"Created {len(tools)} tools for graph: {created_names}")
+        return tools
 
     def _create_tool(
         self,
@@ -191,6 +236,16 @@ class ToolFactory:
             # Check for cancellation before execution
             await context.check_cancelled()
 
+            # Check tool call limit BEFORE execution
+            can_call, error_msg = context.can_call_tool(tool.name)
+            if not can_call:
+                logger.warning(f"[TOOL] Limit reached for '{tool.name}': {error_msg}")
+                return json.dumps({
+                    "success": False,
+                    "content": "",
+                    "error": error_msg,
+                })
+
             # Extract params from tool_context (Strands injects this)
             kwargs = tool_context.tool_use.get("input", {})
 
@@ -202,6 +257,10 @@ class ToolFactory:
             try:
                 result = await tool.execute(kwargs, context)
                 duration_ms = (time.time() - start_time) * 1000
+
+                # Record ONLY successful tool calls (for limit tracking)
+                if result.success:
+                    context.record_successful_tool_call(tool.name)
 
                 # Log result with truncation
                 result_preview = truncate(result.content, 300) if result.content else "(empty)"

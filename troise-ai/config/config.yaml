@@ -147,9 +147,10 @@ tools:
   # Tools available to ALL agents automatically
   # ask_user removed - agents that need it add explicitly (e.g., agentic_code)
   universal_tools:
-    - skill_gateway
     - remember
     - recall
+    - web_search
+    - web_fetch
 
 # Session configuration
 session:

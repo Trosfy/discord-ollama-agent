@@ -30,9 +30,9 @@ PLUGIN = {
     "factory": create_deep_research_agent,
     "description": "Conducts comprehensive multi-source research and creates reports",
     "category": "research",
-    "tools": ["brain_search"],  # + universal tools (remember, recall, web_search, web_fetch)
+    "tools": [],  # + universal tools (remember, recall, web_search, web_fetch)
     "config": {
-        # Model determined by profile's research_model via model_role
+        "model_role": "research",
         "timeout": 600,  # 10 minutes max for deep research
     },
     "routing": {

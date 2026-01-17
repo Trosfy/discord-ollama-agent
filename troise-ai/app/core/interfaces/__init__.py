@@ -31,6 +31,18 @@ from .circuit_breaker import (
     CircuitBreakerMetrics,
     ICircuitBreaker,
 )
+from .graph import (
+    GraphState,
+    NodeResult,
+    GraphResult,
+    Edge,
+    IGraphNode,
+    IGraphCondition,
+    IGraph,
+    IGraphExecutor,
+    IGraphRegistry,
+    END,
+)
 
 __all__ = [
     "ISkill",
@@ -66,4 +78,15 @@ __all__ = [
     "CircuitState",
     "CircuitBreakerMetrics",
     "ICircuitBreaker",
+    # Graph interfaces
+    "GraphState",
+    "NodeResult",
+    "GraphResult",
+    "Edge",
+    "IGraphNode",
+    "IGraphCondition",
+    "IGraph",
+    "IGraphExecutor",
+    "IGraphRegistry",
+    "END",
 ]

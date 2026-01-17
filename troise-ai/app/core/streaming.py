@@ -381,6 +381,8 @@ async def stream_agent_response(
         # Extract response from result
         if isinstance(result, dict):
             response = result.get("content", "") or result.get("text", "") or str(result)
+        elif hasattr(result, "content"):
+            response = result.content
         else:
             response = str(result)
 

@@ -96,10 +96,10 @@ async def test_execute_returns_results(web_search_tool, mock_context):
     ]
 
     mock_searxng = _mock_searxng_response(searxng_results)
-    mock_instant = _mock_instant_answer_response({})
 
     mock_session = MagicMock()
-    mock_session.get = MagicMock(side_effect=[mock_instant, mock_searxng])
+    # SearXNG is called first; DuckDuckGo not called when SearXNG succeeds
+    mock_session.get = MagicMock(return_value=mock_searxng)
     mock_session.closed = False
     web_search_tool._session = mock_session
 
@@ -114,20 +114,23 @@ async def test_execute_returns_results(web_search_tool, mock_context):
     assert len(content["results"]) == 2
     assert content["results"][0]["title"] == "Example Page 1"
     assert content["results"][0]["engine"] == "google"
+    # DuckDuckGo not called when SearXNG returns results
+    assert content["instant_answer"] is None
 
 
 async def test_execute_with_instant_answer(web_search_tool, mock_context):
-    """execute() includes instant answer when available."""
+    """execute() falls back to DuckDuckGo instant answer when SearXNG returns no results."""
+    mock_searxng = _mock_searxng_response([])  # Empty results triggers fallback
     mock_instant = _mock_instant_answer_response({
         "Heading": "Python",
         "Abstract": "Python is a programming language.",
         "AbstractSource": "Wikipedia",
         "AbstractURL": "https://en.wikipedia.org/wiki/Python",
     })
-    mock_searxng = _mock_searxng_response([])
 
     mock_session = MagicMock()
-    mock_session.get = MagicMock(side_effect=[mock_instant, mock_searxng])
+    # SearXNG called first (returns empty), then DuckDuckGo fallback
+    mock_session.get = MagicMock(side_effect=[mock_searxng, mock_instant])
     mock_session.closed = False
     web_search_tool._session = mock_session
 
@@ -148,7 +151,8 @@ async def test_execute_no_results(web_search_tool, mock_context):
     mock_instant = _mock_instant_answer_response({})
 
     mock_session = MagicMock()
-    mock_session.get = MagicMock(side_effect=[mock_instant, mock_searxng])
+    # SearXNG first (empty), then DuckDuckGo fallback (also empty)
+    mock_session.get = MagicMock(side_effect=[mock_searxng, mock_instant])
     mock_session.closed = False
     web_search_tool._session = mock_session
 
@@ -170,10 +174,10 @@ async def test_execute_includes_engine_info(web_search_tool, mock_context):
     ]
 
     mock_searxng = _mock_searxng_response(searxng_results)
-    mock_instant = _mock_instant_answer_response({})
 
     mock_session = MagicMock()
-    mock_session.get = MagicMock(side_effect=[mock_instant, mock_searxng])
+    # SearXNG succeeds, no DuckDuckGo fallback needed
+    mock_session.get = MagicMock(return_value=mock_searxng)
     mock_session.closed = False
     web_search_tool._session = mock_session
 
@@ -198,10 +202,10 @@ async def test_execute_respects_num_results(web_search_tool, mock_context):
     ]
 
     mock_searxng = _mock_searxng_response(searxng_results)
-    mock_instant = _mock_instant_answer_response({})
 
     mock_session = MagicMock()
-    mock_session.get = MagicMock(side_effect=[mock_instant, mock_searxng])
+    # SearXNG succeeds, no DuckDuckGo fallback
+    mock_session.get = MagicMock(return_value=mock_searxng)
     mock_session.closed = False
     web_search_tool._session = mock_session
 
@@ -220,7 +224,8 @@ async def test_execute_max_num_results_capped(web_search_tool, mock_context):
     mock_instant = _mock_instant_answer_response({})
 
     mock_session = MagicMock()
-    mock_session.get = MagicMock(side_effect=[mock_instant, mock_searxng])
+    # SearXNG first (empty), then DuckDuckGo fallback (empty)
+    mock_session.get = MagicMock(side_effect=[mock_searxng, mock_instant])
     mock_session.closed = False
     web_search_tool._session = mock_session
 
@@ -238,7 +243,8 @@ async def test_execute_with_categories(web_search_tool, mock_context):
     mock_instant = _mock_instant_answer_response({})
 
     mock_session = MagicMock()
-    mock_session.get = MagicMock(side_effect=[mock_instant, mock_searxng])
+    # SearXNG first (empty), then DuckDuckGo fallback (empty)
+    mock_session.get = MagicMock(side_effect=[mock_searxng, mock_instant])
     mock_session.closed = False
     web_search_tool._session = mock_session
 

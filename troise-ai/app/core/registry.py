@@ -438,14 +438,22 @@ class PluginRegistry:
             config = agent.get('config', {})
             agent_tool_names = config.get('tools', [])
 
-        # Get universal tools from config
-        universal_tool_names = self._get_universal_tools()
+        # Check if agent opts out of universal tools
+        config = agent.get('config', {})
+        skip_universal = config.get('skip_universal_tools', False)
 
-        # Combine: universal first, then agent-specific (avoid duplicates)
-        all_tool_names = list(universal_tool_names)
-        for name in agent_tool_names:
-            if name not in all_tool_names:
-                all_tool_names.append(name)
+        if skip_universal:
+            # Agent only gets its specific tools
+            all_tool_names = list(agent_tool_names)
+        else:
+            # Get universal tools from config
+            universal_tool_names = self._get_universal_tools()
+
+            # Combine: universal first, then agent-specific (avoid duplicates)
+            all_tool_names = list(universal_tool_names)
+            for name in agent_tool_names:
+                if name not in all_tool_names:
+                    all_tool_names.append(name)
 
         # Log for debugging tool resolution
         available_tool_names = list(self._tools.keys())
@@ -466,8 +474,8 @@ class PluginRegistry:
         """Get universal tools from config or defaults."""
         if self._config and hasattr(self._config, 'tools'):
             return self._config.tools.universal_tools
-        # Fallback - ask_user removed, agents that need it add explicitly
-        return ["skill_gateway", "remember", "recall"]
+        # Fallback - matches ToolsConfig default
+        return ["remember", "recall", "web_search", "web_fetch"]
 
     def list_skills(self) -> List[str]:
         """Get list of all registered skill names."""

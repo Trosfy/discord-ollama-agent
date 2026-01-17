@@ -1,7 +1,7 @@
 """Web search tool implementation.
 
 Searches the web using SearXNG (self-hosted metasearch engine).
-Falls back to DuckDuckGo if SearXNG is unavailable.
+Falls back to DuckDuckGo instant answer API only if SearXNG returns no results.
 """
 import asyncio
 import json
@@ -240,15 +240,18 @@ Returns search results with titles, URLs, and snippets."""
             )
 
         try:
-            # Try to get instant answer first
-            instant_answer = await self._search_instant_answer(query)
-
-            # Get web search results from SearXNG
+            # Try SearXNG first (primary search engine)
             search_results = await self._search_searxng(
                 query=query,
                 num_results=num_results,
                 categories=categories,
             )
+
+            # Only fall back to DuckDuckGo if SearXNG returned no results
+            instant_answer = None
+            if not search_results:
+                logger.info("SearXNG returned no results, trying DuckDuckGo fallback")
+                instant_answer = await self._search_instant_answer(query)
 
             if not search_results and not instant_answer:
                 return ToolResult(

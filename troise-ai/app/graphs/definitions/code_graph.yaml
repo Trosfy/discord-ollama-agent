@@ -1,0 +1,88 @@
+# Code Graph Definition - Conditional Sequential
+# Full development pipeline for CODE classification
+#
+# Pipeline (with conditional review loop and optional tests):
+# explorer (code) -> task_planner -> agentic_code -> code_reviewer
+#                                                         |
+#                                    [has_issues] ---|--- [needs_tests] --- [simple_approval]
+#                                         |                   |                    |
+#                                     debugger          test_generator            END
+#                                         |                   |
+#                                         +-> code_reviewer   +-> END
+
+name: code_graph
+domain: code
+description: "CODE - development pipeline with conditional review loop"
+
+entry_node: explorer
+simple_entry: agentic_code  # Skip exploration for simple requests
+max_loops: 3
+
+nodes:
+  explorer:
+    agent: explorer
+    prompt_variant: code
+    tools: [read_file]
+
+  task_planner:
+    agent: task_planner
+
+  agentic_code:
+    agent: agentic_code
+    tools: [brain_search, read_file, run_code, ask_user]
+
+  code_reviewer:
+    agent: code_reviewer
+    tools: [read_file]
+
+  debugger:
+    agent: debugger
+    tools: [read_file, run_code]
+
+  test_generator:
+    agent: test_generator
+    tools: [read_file, run_code]
+
+edges:
+  explorer:
+    - to: task_planner
+
+  task_planner:
+    - to: agentic_code
+
+  agentic_code:
+    - to: code_reviewer
+
+  code_reviewer:
+    - to: debugger
+      condition: has_issues
+    - to: test_generator
+      condition: needs_tests        # Only when tests requested or code is complex
+    - to: END
+      condition: simple_approval    # Skip tests for simple code
+
+  debugger:
+    - to: code_reviewer  # Loop back for re-review
+
+  test_generator:
+    - to: END
+
+complexity_indicators:
+  complex:
+    - "full application"
+    - "complete system"
+    - "multiple files"
+    - "architecture"
+    - "refactor"
+    - "redesign"
+    - "implement feature"
+    - "build a"
+    - "create a project"
+  trivial:
+    - "one liner"
+    - "simple function"
+    - "quick fix"
+    - "typo"
+    - "add a comment"
+    - "rename"
+    - "format"

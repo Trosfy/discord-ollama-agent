@@ -1,0 +1,21 @@
+# General Graph Definition
+# Single-node graph for GENERAL classification (backward compatibility)
+#
+# This is the simplest graph - just the general agent responding to queries.
+# Preserves existing behavior for general chat, Q&A, and simple tasks.
+
+name: general_graph
+domain: general
+description: "GENERAL classification - single agent for chat and Q&A"
+
+entry_node: general
+
+nodes:
+  general:
+    agent: general
+    tool_limits:
+      web_fetch: 3
+
+edges:
+  general:
+    - to: END

@@ -1,0 +1,60 @@
+# Braindump Graph Definition
+# Thought capture to vault pipeline for BRAINDUMP classification
+#
+# Pipeline:
+# explorer (braindump) -> braindump -> thought_organizer -> vault_connector
+#                                                           |
+#                              (rich_connections) -> insight_extractor
+#                              (sparse_connections) -> note_formatter
+#                                                      |
+#                                                      v
+#                                                     END
+
+name: braindump_graph
+domain: braindump
+description: "BRAINDUMP classification - thought capture to vault storage"
+
+entry_node: explorer
+
+nodes:
+  explorer:
+    agent: explorer
+    prompt_variant: braindump
+    tools: [brain_search, brain_fetch]
+
+  braindump:
+    agent: braindump
+
+  thought_organizer:
+    agent: thought_organizer
+
+  vault_connector:
+    agent: vault_connector
+
+  note_formatter:
+    agent: note_formatter
+
+  insight_extractor:
+    agent: insight_extractor
+
+edges:
+  explorer:
+    - to: braindump
+
+  braindump:
+    - to: thought_organizer
+
+  thought_organizer:
+    - to: vault_connector
+
+  vault_connector:
+    - to: insight_extractor
+      condition: rich_connections
+    - to: note_formatter
+      condition: sparse_connections
+
+  insight_extractor:
+    - to: note_formatter
+
+  note_formatter:
+    - to: END

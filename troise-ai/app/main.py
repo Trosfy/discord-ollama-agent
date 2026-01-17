@@ -13,6 +13,12 @@ Provides WebSocket-based chat interface with:
 import sys
 sys.path.insert(0, '/shared')
 
+# Suppress harmless OpenTelemetry context detachment errors from Strands SDK
+# These occur when async context tokens cross boundaries but don't affect functionality
+import logging
+_otel_context_logger = logging.getLogger("opentelemetry.context")
+_otel_context_logger.setLevel(logging.CRITICAL)
+
 import asyncio
 import uuid
 from contextlib import asynccontextmanager
@@ -145,6 +151,13 @@ async def lifespan(app: FastAPI):
         f"Discovered: {registry.skill_count} skills, "
         f"{registry.agent_count} agents, {registry.tool_count} tools"
     )
+
+    # Load graph definitions
+    from app.graphs import load_graphs
+    from app.core.graph import GraphRegistry
+    graph_registry = container.resolve(GraphRegistry)
+    graphs_loaded = load_graphs(graph_registry, container)
+    logger.info(f"Loaded {graphs_loaded} graph definitions")
 
     # Resolve router and executor from container (already registered)
     router = container.resolve(Router)

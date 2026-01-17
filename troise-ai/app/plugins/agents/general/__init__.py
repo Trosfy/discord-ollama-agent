@@ -30,7 +30,7 @@ PLUGIN = {
     "category": "general",
     "tools": ["run_code", "skill_gateway"],  # + universal tools (remember, recall, web_search, web_fetch)
     "config": {
-        # Model determined by profile's general_model via model_role
+        "model_role": "general",
         "timeout": 120,
     },
     "routing": {

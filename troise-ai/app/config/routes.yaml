@@ -1,0 +1,62 @@
+# Route Configuration for TROISE AI
+#
+# Maps intent classifications to handlers (agents or graphs).
+# Open for extension: Add new routes by editing this file, no code changes needed.
+#
+# Handler types:
+#   - agent: Direct agent execution (single agent handles entire request)
+#   - graph: Graph execution (multi-agent workflow with nodes and edges)
+#
+# Route selection priority:
+#   1. If mode=graph and graph exists in registry, use graph handler
+#   2. Fall back to agent handler
+
+# Execution mode: "agent" (direct) or "graph" (multi-agent workflows)
+mode: graph
+
+# Default route when classification fails
+default_route: GENERAL
+
+# Route definitions
+routes:
+  GENERAL:
+    description: "General chat, Q&A, explanations, simple tasks"
+    agent:
+      name: general
+    graph:
+      name: general_graph
+    examples:
+      - "What is Python?"
+      - "Explain recursion"
+      - "Tell me about HTTP"
+
+  RESEARCH:
+    description: "Deep research requiring extensive web searches and many sources"
+    agent:
+      name: deep_research
+    graph:
+      name: research_graph
+    examples:
+      - "Research the history of Bitcoin regulation"
+      - "Find latest AI developments"
+
+  CODE:
+    description: "Code writing, debugging, technical implementation"
+    agent:
+      name: agentic_code
+    graph:
+      name: code_graph
+    examples:
+      - "Write a function to reverse a string"
+      - "Fix this bug"
+      - "Build a REST API"
+
+  BRAINDUMP:
+    description: "Thought capture, organization, journaling, brain dumps"
+    agent:
+      name: braindump
+    graph:
+      name: braindump_graph
+    examples:
+      - "Let me dump my thoughts about..."
+      - "I need to organize my ideas"

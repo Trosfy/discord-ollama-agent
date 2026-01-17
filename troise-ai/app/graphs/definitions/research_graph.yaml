@@ -1,0 +1,26 @@
+# Research Graph Definition
+# Single node: lead_researcher handles research and citations directly
+#
+# Architecture:
+# - lead_researcher: Orchestrates parallel topic research via research_topics tool,
+#   synthesizes findings, and formats output with proper citations
+#
+# Parallel execution happens INSIDE the research_topics tool via asyncio.gather().
+
+name: research_graph
+domain: research
+description: "RESEARCH - single agent with parallel topic research"
+
+entry_node: lead_researcher
+max_loops: 1
+
+nodes:
+  lead_researcher:
+    type: agent
+    agent: deep_research
+    tools:
+      - research_topics
+
+edges:
+  lead_researcher:
+    - to: END

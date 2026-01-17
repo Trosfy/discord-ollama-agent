@@ -151,6 +151,10 @@ class MockToolFactory:
     def create_tool(self, tool_name: str, context: ExecutionContext) -> Optional[Dict]:
         return {"name": tool_name}
 
+    async def cleanup(self):
+        """Clean up any tool resources."""
+        pass
+
 
 def create_mock_context() -> ExecutionContext:
     """Create a mock execution context."""

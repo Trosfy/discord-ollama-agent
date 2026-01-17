@@ -30,7 +30,7 @@ PLUGIN = {
     "category": "productivity",
     "tools": ["brain_search", "brain_fetch"],  # + universal tools (remember, recall, web_search, web_fetch)
     "config": {
-        # Model determined by profile's braindump_model via model_role
+        "model_role": "braindump",
         "timeout": 300,  # 5 minutes max
     },
     "routing": {

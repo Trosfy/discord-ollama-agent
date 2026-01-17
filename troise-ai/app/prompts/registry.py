@@ -53,17 +53,20 @@ class PromptRegistry:
         category: str,
         name: str,
         profile: Optional[str] = None,
+        graph_domain: Optional[str] = None,
     ) -> str:
-        """Load prompt with profile fallback.
+        """Load prompt with profile and graph_domain fallback.
 
-        Lookup order:
-        1. prompts/{category}/variants/{profile}/{name}.prompt (if profile specified)
-        2. prompts/{category}/{name}.prompt (fallback)
+        Lookup order (most specific to least specific):
+        1. prompts/{category}/variants/{profile}/{graph_domain}/{name}.prompt
+        2. prompts/{category}/variants/{profile}/{name}.prompt
+        3. prompts/{category}/{name}.prompt (fallback)
 
         Args:
             category: Prompt category ('agents', 'layers', 'routing', 'preprocessing')
             name: Prompt name without extension
             profile: Optional profile ('performance', 'conservative', 'balanced')
+            graph_domain: Optional graph domain ('code', 'research', 'braindump')
 
         Returns:
             Prompt content as string.
@@ -71,7 +74,22 @@ class PromptRegistry:
         Raises:
             FileNotFoundError: If prompt not found in any location.
         """
-        # Try profile-specific variant first (if profile provided and not "balanced")
+        # Try profile + graph_domain variant first (most specific)
+        if profile and profile != "balanced" and graph_domain:
+            cache_key = f"{category}/variants/{profile}/{graph_domain}/{name}"
+            if cache_key in self._cache:
+                return self._cache[cache_key]
+
+            variant_path = (
+                self._prompts_dir / category / "variants" / profile / graph_domain / f"{name}.prompt"
+            )
+            if variant_path.exists():
+                content = variant_path.read_text()
+                self._cache[cache_key] = content
+                logger.debug(f"Loaded prompt variant (profile+domain): {cache_key}")
+                return content
+
+        # Try profile-specific variant (if profile provided and not "balanced")
         if profile and profile != "balanced":
             cache_key = f"{category}/variants/{profile}/{name}"
             if cache_key in self._cache:
@@ -81,7 +99,7 @@ class PromptRegistry:
             if variant_path.exists():
                 content = variant_path.read_text()
                 self._cache[cache_key] = content
-                logger.debug(f"Loaded prompt variant: {cache_key}")
+                logger.debug(f"Loaded prompt variant (profile): {cache_key}")
                 return content
 
         # Fall back to default (balanced)
@@ -97,7 +115,8 @@ class PromptRegistry:
             return content
 
         raise FileNotFoundError(
-            f"Prompt not found: category='{category}', name='{name}', profile='{profile}'. "
+            f"Prompt not found: category='{category}', name='{name}', "
+            f"profile='{profile}', graph_domain='{graph_domain}'. "
             f"Searched: {default_path}"
         )
 
@@ -120,17 +139,24 @@ class PromptRegistry:
 
         return sorted(prompts)
 
-    def list_variants(self, category: str, profile: str) -> List[str]:
+    def list_variants(
+        self, category: str, profile: str, graph_domain: Optional[str] = None
+    ) -> List[str]:
         """List available profile variants in a category.
 
         Args:
             category: Prompt category
             profile: Profile name ('conservative', 'performance')
+            graph_domain: Optional graph domain for nested variants
 
         Returns:
             List of variant prompt names.
         """
-        variants_dir = self._prompts_dir / category / "variants" / profile
+        if graph_domain:
+            variants_dir = self._prompts_dir / category / "variants" / profile / graph_domain
+        else:
+            variants_dir = self._prompts_dir / category / "variants" / profile
+
         if not variants_dir.exists():
             return []
 
@@ -139,6 +165,27 @@ class PromptRegistry:
             variants.append(path.stem)
 
         return sorted(variants)
+
+    def list_graph_domains(self, category: str, profile: str) -> List[str]:
+        """List available graph domains for a profile.
+
+        Args:
+            category: Prompt category
+            profile: Profile name ('conservative', 'performance')
+
+        Returns:
+            List of graph domain names (subdirectories under profile).
+        """
+        profile_dir = self._prompts_dir / category / "variants" / profile
+        if not profile_dir.exists():
+            return []
+
+        domains = []
+        for path in profile_dir.iterdir():
+            if path.is_dir():
+                domains.append(path.name)
+
+        return sorted(domains)
 
     def clear_cache(self):
         """Clear the prompt cache (for development/testing)."""

@@ -8,19 +8,23 @@ Classifications:
 - RESEARCH: Deep research requiring web searches and multiple sources
 - CODE: Code writing, debugging, technical implementation
 - BRAINDUMP: Thought capture, organization, journaling
+
+Routes are loaded from app/config/routes.yaml for OCP compliance.
 """
 import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from strands import Agent
 
 from .config import Config
+from ..config import load_routes_config
 
 if TYPE_CHECKING:
     from .interfaces.services import IVRAMOrchestrator
+    from .interfaces.graph import IGraphRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -28,20 +32,57 @@ logger = logging.getLogger(__name__)
 @dataclass
 class RoutingResult:
     """Result of routing classification."""
-    type: str  # "skill" or "agent"
-    name: str  # Name of the skill or agent
+    type: str  # "skill", "agent", or "graph"
+    name: str  # Name of the skill, agent, or graph
     reason: str  # Brief explanation for the routing decision
     confidence: float = 0.9  # Confidence score (0.0-1.0)
     fallback: bool = False  # True if this is a fallback to default
 
 
-# Mapping from classification to handler
-ROUTE_MAP = {
-    "GENERAL": ("agent", "general"),  # Uses skill gateway for specialized tasks
-    "RESEARCH": ("agent", "deep_research"),
-    "CODE": ("agent", "agentic_code"),
-    "BRAINDUMP": ("agent", "braindump"),
-}
+def _load_route_map() -> Tuple[Dict[str, Tuple[str, str]], str, str]:
+    """Load route map from YAML configuration.
+
+    Returns:
+        Tuple of (route_map dict, execution mode, default route).
+    """
+    config = load_routes_config()
+
+    mode = config.get("mode", "agent")
+    default_route = config.get("default_route", "GENERAL")
+    routes = config.get("routes", {})
+
+    route_map = {}
+    for classification, route_config in routes.items():
+        # Determine handler based on mode
+        if mode == "graph" and "graph" in route_config:
+            handler_type = "graph"
+            handler_name = route_config["graph"]["name"]
+        elif "agent" in route_config:
+            handler_type = "agent"
+            handler_name = route_config["agent"]["name"]
+        else:
+            # Fallback to general agent
+            handler_type = "agent"
+            handler_name = "general"
+            logger.warning(f"No handler configured for {classification}, using default")
+
+        route_map[classification] = (handler_type, handler_name)
+
+    # Ensure we have at least the default routes if config is empty
+    if not route_map:
+        route_map = {
+            "GENERAL": ("agent", "general"),
+            "RESEARCH": ("agent", "deep_research"),
+            "CODE": ("agent", "agentic_code"),
+            "BRAINDUMP": ("agent", "braindump"),
+        }
+        logger.warning("Using hardcoded routes - config not loaded")
+
+    return route_map, mode, default_route
+
+
+# Load routes from configuration
+ROUTE_MAP, EXECUTION_MODE, DEFAULT_ROUTE = _load_route_map()
 
 
 class Router:
@@ -55,10 +96,14 @@ class Router:
     Uses VRAMOrchestrator.get_model() with additional_args=None to
     disable thinking for fast, deterministic classification.
 
+    Routes are loaded from app/config/routes.yaml. Set mode to "graph"
+    to use graph-based multi-agent workflows instead of direct agents.
+
     Example:
         router = Router(config, vram_orchestrator)
         result = await router.route("Research quantum computing advances", context)
         # result.type = "agent", result.name = "deep_research"
+        # Or if mode=graph: result.type = "graph", result.name = "research_graph"
     """
 
     ROUTING_PROMPT = """Reasoning: low
@@ -83,12 +128,11 @@ USER REQUEST: {user_input}
 {file_context_line}
 Output ONLY the classification name (e.g., "GENERAL" or "CODE"), nothing else."""
 
-    DEFAULT_ROUTE = "GENERAL"
-
     def __init__(
         self,
         config: Config,
         vram_orchestrator: "IVRAMOrchestrator",
+        graph_registry: Optional["IGraphRegistry"] = None,
     ):
         """
         Initialize the router.
@@ -96,9 +140,15 @@ Output ONLY the classification name (e.g., "GENERAL" or "CODE"), nothing else.""
         Args:
             config: Application configuration.
             vram_orchestrator: VRAM orchestrator for model access.
+            graph_registry: Optional graph registry for graph mode validation.
         """
         self._config = config
         self._orchestrator = vram_orchestrator
+        self._graph_registry = graph_registry
+        self._mode = EXECUTION_MODE
+        self._default_route = DEFAULT_ROUTE
+
+        logger.info(f"Router initialized with mode={self._mode}, default={self._default_route}")
 
     async def route(
         self,
@@ -184,28 +234,21 @@ Output ONLY the classification name (e.g., "GENERAL" or "CODE"), nothing else.""
 
         # Check for exact match first
         if route_str in ROUTE_MAP:
-            route_type, route_name = ROUTE_MAP[route_str]
-            return RoutingResult(
-                type=route_type,
-                name=route_name,
-                reason=f"Classified as {route_str}",
-                confidence=0.9,
-            )
+            return self._resolve_graph_fallback(route_str)
 
         # Try to extract route name from response (in case of extra text)
-        for route_name in ROUTE_MAP.keys():
-            if route_name in route_str:
-                route_type, handler_name = ROUTE_MAP[route_name]
-                logger.warning(f"Extracted route from response: {route_name}")
-                return RoutingResult(
-                    type=route_type,
-                    name=handler_name,
-                    reason=f"Extracted {route_name} from response",
-                    confidence=0.7,
-                )
+        for classification in ROUTE_MAP.keys():
+            if classification in route_str:
+                logger.warning(f"Extracted route from response: {classification}")
+                result = self._resolve_graph_fallback(classification)
+                result.confidence = 0.7
+                result.reason = f"Extracted {classification} from response"
+                return result
 
         # Fallback
-        logger.warning(f"Unknown classification: '{route_str}', defaulting to GENERAL")
+        logger.warning(
+            f"Unknown classification: '{route_str}', defaulting to {self._default_route}"
+        )
         return self._fallback_result()
 
     def _fallback_result(self) -> RoutingResult:
@@ -213,15 +256,63 @@ Output ONLY the classification name (e.g., "GENERAL" or "CODE"), nothing else.""
         Create a fallback result when routing fails.
 
         Returns:
-            Fallback RoutingResult using GENERAL route.
+            Fallback RoutingResult using default route from config.
         """
-        route_type, route_name = ROUTE_MAP[self.DEFAULT_ROUTE]
+        if self._default_route in ROUTE_MAP:
+            route_type, route_name = ROUTE_MAP[self._default_route]
+        else:
+            # Ultimate fallback
+            route_type, route_name = "agent", "general"
+
         return RoutingResult(
             type=route_type,
             name=route_name,
             reason="Fallback due to routing failure",
             confidence=0.5,
             fallback=True,
+        )
+
+    def _resolve_graph_fallback(self, classification: str) -> RoutingResult:
+        """
+        Resolve routing when graph mode is enabled but graph doesn't exist.
+
+        Falls back to agent mode if the graph isn't registered.
+
+        Args:
+            classification: The classification name.
+
+        Returns:
+            RoutingResult using agent fallback if graph not available.
+        """
+        route_type, route_name = ROUTE_MAP.get(classification, ("agent", "general"))
+
+        # If graph mode and we have a graph registry, verify graph exists
+        if route_type == "graph" and self._graph_registry:
+            graph = self._graph_registry.get(route_name)
+            if graph is None:
+                # Graph not registered, fall back to agent
+                config = load_routes_config()
+                routes = config.get("routes", {})
+                route_config = routes.get(classification, {})
+
+                if "agent" in route_config:
+                    route_name = route_config["agent"]["name"]
+                    route_type = "agent"
+                    logger.warning(
+                        f"Graph '{route_name}' not registered, falling back to agent"
+                    )
+                else:
+                    route_type = "agent"
+                    route_name = "general"
+                    logger.warning(
+                        f"No agent fallback for {classification}, using general"
+                    )
+
+        return RoutingResult(
+            type=route_type,
+            name=route_name,
+            reason=f"Classified as {classification}",
+            confidence=0.9,
         )
 
     def get_routing_table(self) -> str:

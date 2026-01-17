@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Any, Set, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fastapi import WebSocket
+    from .interfaces.vram_orchestrator import IVRAMOrchestrator
 
 from .exceptions import AgentCancelled
 
@@ -131,6 +132,32 @@ class ExecutionContext:
     called_skills: Set[str] = field(default_factory=set)
 
     # =========================================================================
+    # Graph Execution Context
+    # =========================================================================
+
+    # Graph domain for prompt variant selection ('code', 'research', 'braindump')
+    graph_domain: Optional[str] = None
+
+    # Graph state (set by GraphExecutor during graph execution)
+    graph_state: Optional[Any] = None  # GraphState instance
+
+    # VRAMOrchestrator (set by executor before graph execution, used by SwarmNode)
+    vram_orchestrator: Optional["IVRAMOrchestrator"] = None
+
+    # PromptComposer (set by executor before graph execution, used by SwarmNode)
+    prompt_composer: Optional[Any] = None  # PromptComposer instance
+
+    # Collected sources from web_fetch (captured by SourceCaptureHook)
+    # Only web_fetch URLs are captured - these are actually read sources
+    collected_sources: List[Dict[str, str]] = field(default_factory=list)
+
+    # Tool call tracking (incremented after successful calls only)
+    tool_call_counts: Dict[str, int] = field(default_factory=dict)
+
+    # Tool call limits (tool_name -> max_calls, e.g. {"web_fetch": 3})
+    tool_call_limits: Dict[str, int] = field(default_factory=dict)
+
+    # =========================================================================
     # Preprocessing Context (session-scoped)
     # =========================================================================
 
@@ -245,6 +272,58 @@ class ExecutionContext:
             self,
             skill_call_depth=self.skill_call_depth + 1,
             called_skills=self.called_skills | {skill_name},
+        )
+
+    # Tool call limiting support
+
+    def can_call_tool(self, tool_name: str) -> tuple[bool, Optional[str]]:
+        """
+        Check if a tool can be called (limit not exceeded).
+
+        Args:
+            tool_name: Name of the tool to check.
+
+        Returns:
+            Tuple of (can_call, error_message).
+            If can_call is False, error_message explains why.
+        """
+        limit = self.tool_call_limits.get(tool_name)
+        if limit is None:
+            return True, None
+
+        current = self.tool_call_counts.get(tool_name, 0)
+        if current >= limit:
+            return False, f"Tool '{tool_name}' reached limit of {limit} successful calls."
+        return True, None
+
+    def record_successful_tool_call(self, tool_name: str) -> None:
+        """
+        Record a successful tool call.
+
+        Only successful calls count toward limits.
+
+        Args:
+            tool_name: Name of the tool that succeeded.
+        """
+        self.tool_call_counts[tool_name] = self.tool_call_counts.get(tool_name, 0) + 1
+
+    def with_tool_limits(self, limits: Dict[str, int]) -> "ExecutionContext":
+        """
+        Create a child context with fresh tool counts and specified limits.
+
+        Used for isolated sub-agents (e.g., research_topics per-topic agents)
+        that need their own tool call tracking.
+
+        Args:
+            limits: Tool name to max calls mapping (e.g., {"web_fetch": 5}).
+
+        Returns:
+            New ExecutionContext with reset counts and specified limits.
+        """
+        return replace(
+            self,
+            tool_call_counts={},  # Reset counts for child
+            tool_call_limits=limits,
         )
 
     # Command execution support for execute_command tool (CLI/TUI)

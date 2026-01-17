@@ -647,7 +647,7 @@ class MessageHandler:
 
         state = self.bot.streaming_buffers.get(buffer_key)
         if not state:
-            logger.warning(f"No streaming buffer found for {buffer_key}")
+            logger.debug(f"No streaming buffer found for {buffer_key} (request may have failed before streaming started)")
             return
 
         full_content = state['content']
@@ -760,12 +760,8 @@ class MessageHandler:
                 logger.warning("Response has no content")
                 return
 
-            # Handle multi-part responses (already split by TROISE AI)
-            if part and total_parts:
-                prefix = f"**[{part}/{total_parts}]** " if part > 1 else ""
-                display_content = prefix + content
-            else:
-                display_content = content
+            # Content is already split by TROISE AI if needed
+            display_content = content
 
             # Split if still too long (shouldn't happen with TROISE AI formatting)
             if len(display_content) > 2000:

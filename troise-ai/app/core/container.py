@@ -297,6 +297,8 @@ def create_container() -> Container:
             profile_manager=c.resolve(ProfileManager),
         )
     )
+    # Note: ModelFactory is created internally by VRAMOrchestrator
+    # Swarm models are created at execution time via VRAMOrchestrator.get_model()
 
     # Register EmbeddingService (depends on Config, DynamoDBClient, ProfileManager)
     container.register_factory(
@@ -407,6 +409,21 @@ def create_container() -> Container:
     )
 
     # ===========================================================================
+    # Graph Execution Services
+    # ===========================================================================
+    from .graph import GraphRegistry, create_graph_registry
+    from .graph_executor import GraphExecutor, create_graph_executor
+    from .interfaces.graph import IGraphRegistry, IGraphExecutor
+
+    # Register GraphRegistry (will be populated by graph loader at startup)
+    container.register_factory(GraphRegistry, lambda c: create_graph_registry())
+    container.register_factory(IGraphRegistry, lambda c: c.resolve(GraphRegistry))
+
+    # Register GraphExecutor
+    container.register_factory(GraphExecutor, lambda c: create_graph_executor())
+    container.register_factory(IGraphExecutor, lambda c: c.resolve(GraphExecutor))
+
+    # ===========================================================================
     # Core Execution Services (Executor, Router, ToolFactory)
     # ===========================================================================
     from .executor import Executor
@@ -414,13 +431,15 @@ def create_container() -> Container:
     from .tool_factory import ToolFactory
     from .interfaces.services import IVRAMOrchestrator, IExecutor
 
-    # Register Router (simplified: 4 classifications, no registry needed)
-    # Router now uses VRAMOrchestrator.get_model() with Strands models
+    # Register Router (loads routes from config/routes.yaml)
+    # Router uses VRAMOrchestrator.get_model() with Strands models
+    # GraphRegistry passed for graph mode validation
     container.register_factory(
         Router,
         lambda c: Router(
             config=c.resolve(Config),
             vram_orchestrator=c.resolve(VRAMOrchestrator),
+            graph_registry=c.resolve(IGraphRegistry),
         )
     )
 
@@ -430,13 +449,15 @@ def create_container() -> Container:
         lambda c: ToolFactory(registry=c.resolve(PluginRegistry), container=c)
     )
 
-    # Register Executor
+    # Register Executor (with graph support)
     container.register_factory(
         Executor,
         lambda c: Executor(
             registry=c.resolve(PluginRegistry),
             container=c,
             tool_factory=c.resolve(ToolFactory),
+            graph_registry=c.resolve(IGraphRegistry),
+            graph_executor=c.resolve(IGraphExecutor),
         )
     )
 

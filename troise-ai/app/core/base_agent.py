@@ -92,6 +92,17 @@ class BaseAgent(ABC):
         # Thinking level override: "low", "medium", "high", or None for model default
         self._thinking_level = self._config.get("thinking_level")
 
+    def set_tools(self, tools: List[Any]) -> None:
+        """Set tools at execution time (for graph execution).
+
+        Allows tools to be injected after agent creation, enabling
+        shared tool instances across graph nodes.
+
+        Args:
+            tools: List of Strands tool instances.
+        """
+        self._tools = tools
+
     def _build_system_prompt(self, context: ExecutionContext) -> str:
         """
         Build context-aware system prompt using PromptComposer.
@@ -195,11 +206,16 @@ class BaseAgent(ABC):
                 additional_args=additional_args,
             )
 
-            # Create Strands agent
+            # Create hook for URL capture from web_fetch
+            from .hooks import SourceCaptureHook
+            source_hook = SourceCaptureHook(context)
+
+            # Create Strands agent with hook
             agent = Agent(
                 model=model,
                 tools=self._tools,
                 system_prompt=system_prompt,
+                hooks=[source_hook],
             )
 
             logger.info(f"Starting {self.name} agent with model {self._model_id}")
