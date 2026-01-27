@@ -34,8 +34,8 @@ class DebuggerAgent(BaseAgent):
 
     name = "debugger"
     category = "code"
-    # Uses brain_search for patterns, read_file for context, run_code for testing
-    tools = ["brain_search", "read_file", "run_code"]
+    # Uses brain_search for patterns, run_code for testing
+    tools = ["brain_search", "run_code"]
 
     def __init__(
         self,

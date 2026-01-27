@@ -363,6 +363,7 @@ def create_container() -> Container:
         ArtifactExtractionChain,
         ContentSanitizer,
         ToolArtifactHandler,
+        ImageArtifactHandler,
         LLMExtractionHandler,
         RegexFallbackHandler,
     )
@@ -374,7 +375,12 @@ def create_container() -> Container:
     def create_artifact_chain(c: Container) -> ArtifactExtractionChain:
         sanitizer = c.resolve(ContentSanitizer)
 
+        # Try to get storage for image handler (optional - won't fail if not available)
+        storage = c.try_resolve(IFileStorage)
+
         handlers = [
+            # Image handler first - highest priority for generate_image tool calls
+            ImageArtifactHandler(storage=storage) if storage else None,
             ToolArtifactHandler(),
             LLMExtractionHandler(
                 config=c.resolve(Config),
@@ -383,9 +389,43 @@ def create_container() -> Container:
             ),
             RegexFallbackHandler(sanitizer=sanitizer),
         ]
+        # Filter out None handlers
+        handlers = [h for h in handlers if h is not None]
         return ArtifactExtractionChain(handlers)
 
     container.register_factory(ArtifactExtractionChain, create_artifact_chain)
+
+    # ===========================================================================
+    # Response Handler (coordinates postprocessing and delivery)
+    # ===========================================================================
+    from ..services.response_handler import ResponseHandler
+
+    container.register_factory(
+        ResponseHandler,
+        lambda c: ResponseHandler(
+            formatter=c.resolve(DiscordResponseFormatter),  # Default to Discord
+            artifact_chain=c.resolve(ArtifactExtractionChain),
+        )
+    )
+
+    # ===========================================================================
+    # Output Strategies (interface-specific handling)
+    # ===========================================================================
+    from ..strategies import DiscordOutputStrategy, TerminalOutputStrategy
+
+    # Discord: Sanitized flow for small/medium models
+    container.register_factory(
+        DiscordOutputStrategy,
+        lambda c: DiscordOutputStrategy(
+            response_handler=c.resolve(ResponseHandler),
+        )
+    )
+
+    # Terminal: Direct flow for TUI (stub for future)
+    container.register_factory(
+        TerminalOutputStrategy,
+        lambda c: TerminalOutputStrategy()
+    )
 
     # ===========================================================================
     # Response Formatters

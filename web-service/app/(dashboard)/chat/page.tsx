@@ -19,13 +19,14 @@ export default function ChatIndexPage() {
       const mostRecent = conversations[0];
       router.replace(`/chat/${mostRecent.id}`);
     } else {
-      // Create a new conversation
+      // Create a new conversation with empty messages array
       const newConversation = {
         id: Date.now().toString(),
         title: "New Chat",
         createdAt: new Date(),
         updatedAt: new Date(),
         archived: false,
+        messages: [],
       };
 
       addConversation(newConversation);

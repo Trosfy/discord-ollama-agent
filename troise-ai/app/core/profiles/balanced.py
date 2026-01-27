@@ -72,6 +72,16 @@ class BalancedProfile:
         """Model for text embeddings and RAG."""
         return "qwen3-embedding:4b"
 
+    @property
+    def image_handler_model(self) -> str:
+        """LLM for image request handling - crafts prompts, selects params."""
+        return "gpt-oss:20b"
+
+    @property
+    def image_model(self) -> str:
+        """Diffusion model for actual image generation (NVFP4 via ComfyUI)."""
+        return "flux2-dev-nvfp4"
+
     def validate(self) -> None:
         """
         Validate all assigned models exist in available_models.
@@ -87,6 +97,8 @@ class BalancedProfile:
             self.braindump_model,
             self.vision_model,
             self.embedding_model,
+            self.image_handler_model,
+            self.image_model,
         }
 
         available_names = {m.name for m in self._models}
@@ -102,6 +114,13 @@ class BalancedProfile:
         # Default Ollama backend (use env var for Docker compatibility)
         ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
         ollama = BackendConfig(type="ollama", host=ollama_host)
+
+        # Diffusion backend (in-process, no HTTP) - BNB 4-bit fallback
+        diffusion = BackendConfig(type="diffusion", host="local")
+
+        # ComfyUI backend for NVFP4 image generation
+        comfyui_host = os.getenv("COMFYUI_HOST", "http://localhost:8188")
+        comfyui = BackendConfig(type="comfyui", host=comfyui_host)
 
         return [
             # Router and simple skill model - HIGH priority
@@ -203,5 +222,43 @@ class BalancedProfile:
                 supports_vision=False,
                 supports_thinking=False,
                 context_window=8192,
+            ),
+
+            # Image generation model (FLUX 2.dev NVFP4 via ComfyUI) - NORMAL priority
+            ModelCapabilities(
+                name="flux2-dev-nvfp4",
+                backend=comfyui,
+                model_type="diffusion",
+                vram_size_gb=80.0,  # NVFP4 ~20GB model + ~60GB runtime overhead
+                priority="NORMAL",
+                api_managed=False,  # ComfyUI manages lifecycle
+                supports_tools=False,
+                supports_vision=False,
+                supports_thinking=False,
+                context_window=0,  # N/A for diffusion models
+                options={
+                    "workflow": {
+                        "unet_name": "flux2-dev-nvfp4.safetensors",
+                        "clip_name": "mistral_3_small_flux2_fp4_mixed.safetensors",
+                        "clip_type": "flux2",
+                        "vae_name": "flux2-vae.safetensors",
+                        "latent_type": "EmptyFlux2LatentImage",
+                        "sampler_name": "euler",
+                        "scheduler": "simple",
+                    }
+                },
+            ),
+
+            # Image generation fallback (FLUX 2.dev BNB 4-bit) - LOW priority
+            ModelCapabilities(
+                name="flux2-dev-bnb4bit",
+                backend=diffusion,
+                model_type="diffusion",
+                vram_size_gb=20.0,  # BNB 4-bit quantization similar footprint
+                priority="LOW",
+                supports_tools=False,
+                supports_vision=False,
+                supports_thinking=False,
+                context_window=0,  # N/A for diffusion models
             ),
         ]

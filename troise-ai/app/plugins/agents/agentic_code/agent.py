@@ -17,10 +17,8 @@ class AgenticCodeAgent(BaseAgent):
     """
     Agent for code generation and modification workflows.
 
-    Uses Strands SDK for the tool loop. Tools include:
-    - brain_search: Find related code and documentation
-    - read_file: Read existing source files
-    - run_code: Execute and test code
+    Uses Strands SDK for pure code generation. No filesystem or knowledge tools -
+    the agent focuses solely on generating code based on the user request.
 
     Output: Code should be provided in properly formatted code blocks.
     Postprocessing will extract file artifacts from the response.
@@ -28,7 +26,7 @@ class AgenticCodeAgent(BaseAgent):
     Example:
         agent = AgenticCodeAgent(
             vram_orchestrator=orchestrator,
-            tools=[brain_search, read_file, run_code],
+            tools=[],
             config={"model": "devstral:24b"}
         )
         result = await agent.execute("Create a REST API for user management", context)
@@ -36,7 +34,7 @@ class AgenticCodeAgent(BaseAgent):
 
     name = "agentic_code"
     category = "code"
-    tools = ["brain_search", "read_file", "run_code", "ask_user"]
+    tools = ["ask_user"]  # No filesystem/knowledge tools - pure code generation
     # Prompt loaded from app/prompts/agents/agentic_code.prompt
 
     def __init__(
@@ -77,15 +75,16 @@ class AgenticCodeAgent(BaseAgent):
             stream_handler=stream_handler,
         )
 
-    def _build_metadata(self, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _build_metadata(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        token_usage: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """Build metadata with code-specific tracking."""
-        metadata = super()._build_metadata(tool_calls)
+        metadata = super()._build_metadata(tool_calls, token_usage)
 
         # Add code-specific metrics
-        files_read = [tc for tc in tool_calls if tc["name"] == "read_file"]
         code_runs = [tc for tc in tool_calls if tc["name"] == "run_code"]
-
-        metadata["files_read"] = len(files_read)
         metadata["code_executions"] = len(code_runs)
 
         return metadata

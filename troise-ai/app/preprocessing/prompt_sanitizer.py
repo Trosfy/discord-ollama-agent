@@ -55,14 +55,21 @@ class PromptSanitizer:
     FILE_PATTERNS = [
         "save to", "save as", "put into", "create file", "write to",
         "output to", "export to", "into a file", "as a file",
+        "give me the", "give me a",
+        # Common file extensions
         ".txt", ".md", ".py", ".json", ".js", ".ts", ".yaml", ".yml",
         ".csv", ".xml", ".html", ".css", ".sh", ".sql",
+        # Systems programming
+        ".cpp", ".c", ".h", ".hpp", ".cc", ".cxx",
+        # JVM and compiled
+        ".java", ".kt", ".go", ".rs", ".swift",
+        # Scripting
+        ".rb", ".php", ".pl", ".lua",
     ]
 
-    REPHRASE_PROMPT = """Reasoning: low
+    REPHRASE_PROMPT = """Reasoning: none
 
-Transform user requests by removing file/storage references. Keep the core task.
-Return ONLY the rephrased request, nothing else.
+Rephrase by removing file references. Do NOT write code or explain - output ONLY the rephrased request.
 
 EXAMPLES:
 "write a summary and save to summary.txt" → write a summary
@@ -125,7 +132,10 @@ EXAMPLES:
         expected_filename = self._extract_filename(message) if action_type == "create" else None
 
         duration_ms = (time.time() - start_time) * 1000
-        logger.info(f"Sanitized: action_type={action_type}, duration={duration_ms:.0f}ms")
+        logger.info(
+            f"Sanitized: action_type={action_type}, "
+            f"expected_filename={expected_filename}, duration={duration_ms:.0f}ms"
+        )
 
         return SanitizedPrompt(
             intent=clean_intent,
@@ -144,7 +154,7 @@ EXAMPLES:
     async def _rephrase(self, message: str) -> str:
         """Remove file creation language from message using LLM.
 
-        Uses VRAMOrchestrator + Strands Agent.
+        Uses VRAMOrchestrator + Strands Agent (same pattern as Router).
         Falls back to original message on error.
         """
         # Circuit breaker check
@@ -158,17 +168,17 @@ EXAMPLES:
             model = await self._orchestrator.get_model(
                 model_id=router_model_id,
                 temperature=0.1,
-                max_tokens=256,
+                max_tokens=2000,  # Room for thinking tokens + rephrased output
             )
 
-            # Create Strands Agent for rephrasing
+            # Create minimal Strands Agent for rephrase (same pattern as Router)
             agent = Agent(
                 model=model,
                 tools=[],  # No tools - pure text transformation
                 system_prompt=self._rephrase_prompt,
             )
 
-            # Run agent synchronously (Strands Agent is sync)
+            # Run agent synchronously in executor (Strands Agent is sync)
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(None, agent, message)
             result = str(response).strip()
@@ -176,8 +186,14 @@ EXAMPLES:
             # Reset failure count on success
             self._failure_count = 0
 
+            # Log full sanitized output for debugging (helps catch thinking tokens leaking)
+            logger.info(
+                f"Sanitizer output: len={len(result)}, "
+                f"original_len={len(message)}, "
+                f"content='{result[:200]}{'...' if len(result) > 200 else ''}'"
+            )
+
             if result:
-                logger.debug(f"Rephrased: '{message[:50]}...' → '{result[:50]}...'")
                 return result
             return message
 
@@ -215,6 +231,10 @@ EXAMPLES:
             r'(?:called?|named?)\s+["\']?([a-zA-Z0-9_.-]+\.[a-z]+)["\']?',
             # "save to/as summary.txt", "put into notes.md"
             r'(?:save|put|write|output|export)\s+(?:to|as|into)\s+["\']?([a-zA-Z0-9_.-]+\.[a-z]+)["\']?',
+            # "give me the foo.cpp file", "give me a config.yaml"
+            r'give\s+me\s+(?:the\s+|a\s+)?["\']?([a-zA-Z0-9_.-]+\.[a-z]+)["\']?',
+            # "give me the .cpp file" → infer name from context (returns extension only)
+            r'give\s+me\s+(?:the\s+|a\s+)?\.([a-z]+)\s+file',
             # Common standalone filenames
             r'\b(Dockerfile|Makefile|README\.md|docker-compose\.ya?ml|\.gitignore|\.env)\b',
             # Generic "create X.ext" pattern
@@ -225,6 +245,9 @@ EXAMPLES:
             match = re.search(pattern, message, re.IGNORECASE)
             if match:
                 filename = match.group(1)
+                # Handle extension-only matches (e.g., ".cpp file" → "output.cpp")
+                if not '.' in filename and len(filename) <= 5:
+                    filename = f"output.{filename}"
                 logger.debug(f"Extracted filename: {filename}")
                 return filename
 

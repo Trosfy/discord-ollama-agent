@@ -26,6 +26,14 @@ backends:
     options:
       max_model_len: 32768
 
+  diffusion:
+    type: diffusion
+    host: local  # In-process, no HTTP
+
+  comfyui:
+    type: comfyui
+    host: http://troise-comfyui:8188
+
 # DGX server configuration for remote model serving
 dgx:
   host: 192.168.1.100
@@ -113,9 +121,11 @@ queue:
   default_timeout_seconds: 300    # Default for unknown types
   skill_timeout_seconds: 120      # Skills are typically fast
   agent_timeout_seconds: 600      # Agents may take longer (tool use)
+  image_timeout_seconds: 900      # 15 min for image generation (diffusion models)
 
   # Visibility timeout - mark as stuck if not completed
   visibility_timeout_seconds: 300
+  image_visibility_timeout_seconds: 900  # Match image timeout (no early requeue)
   visibility_check_interval_seconds: 30  # How often to check for stuck requests
 
   # Retry settings

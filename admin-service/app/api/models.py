@@ -59,8 +59,14 @@ async def list_available_models(
                 name=m["name"],
                 vram_size_gb=m["vram_size_gb"],
                 priority=m["priority"],
-                backend=m["backend"],
-                capabilities=m.get("capabilities", []),
+                backend=m.get("backend", {"type": "ollama"}),
+                api_managed=m.get("api_managed", True),
+                supports_tools=m.get("supports_tools", False),
+                supports_vision=m.get("supports_vision", False),
+                supports_thinking=m.get("supports_thinking", False),
+                thinking_format=m.get("thinking_format"),
+                default_thinking_level=m.get("default_thinking_level"),
+                context_window=m.get("context_window"),
                 is_loaded=m["name"] in loaded_model_names
             )
             for m in models_data

@@ -100,17 +100,34 @@ class ResponseHandler:
             "artifacts_suggested": 0,
         }
 
-        # 1. Extract artifacts (chain of responsibility)
+        # 1. Set context on handlers that need it (e.g., ImageArtifactHandler)
+        for handler in self._artifact_chain._handlers:
+            if hasattr(handler, 'set_context'):
+                handler.set_context(context)
+
+        # Log context state for debugging image pipeline
+        logger.info(f"[POSTPROCESS] Context has {len(context.generated_images)} generated images")
+        if context.generated_images:
+            for img in context.generated_images:
+                logger.info(f"[POSTPROCESS]   file_id={img.get('file_id')}, storage_key={img.get('storage_key')}")
+
+        # 2. Extract artifacts (chain of responsibility)
         artifacts = await self._artifact_chain.extract(
             result,
             artifact_requested,
             expected_filename,
         )
 
-        # 2. Format text for interface (needed for artifact extraction even if streamed)
+        # Log extraction results for debugging image pipeline
+        logger.info(f"[POSTPROCESS] Extracted {len(artifacts)} artifact(s)")
+        for art in artifacts:
+            size = len(art.content) if isinstance(art.content, bytes) else len(art.content.encode())
+            logger.info(f"[POSTPROCESS]   {art.filename} ({size} bytes, source={art.source})")
+
+        # 3. Format text for interface (needed for artifact extraction even if streamed)
         formatted = self._formatter.format(result.content, result.metadata)
 
-        # 3. Send text messages (skip if content was already streamed)
+        # 4. Send text messages (skip if content was already streamed)
         if not streamed:
             builder = self._get_builder(context)
             for i, msg_content in enumerate(formatted.messages):
@@ -128,18 +145,30 @@ class ResponseHandler:
                 await websocket.send_json(msg)
                 response_info["messages_sent"] += 1
 
-        # 4. Send file artifacts
+        # 5. Send file artifacts
         if artifacts:
             builder = self._get_builder(context)
             for artifact in artifacts:
-                # Encode content as base64 for binary-safe transfer
-                if isinstance(artifact.content, bytes):
-                    base64_data = base64.b64encode(artifact.content).decode('utf-8')
-                else:
-                    base64_data = base64.b64encode(artifact.content.encode('utf-8')).decode('utf-8')
+                # Check if this is a reference artifact (empty content with storage_key)
+                storage_key = artifact.metadata.get("storage_key") if artifact.metadata else None
+                is_reference = storage_key and isinstance(artifact.content, bytes) and len(artifact.content) == 0
 
-                if artifact.confidence >= self.CONFIDENCE_THRESHOLD:
-                    # High confidence - send as file
+                if is_reference:
+                    # Reference artifact - send storage_key, interface fetches from MinIO
+                    base_msg = {
+                        "type": "file",
+                        "filename": artifact.filename,
+                        "storage_key": storage_key,
+                        "source": artifact.source,
+                        "confidence": artifact.confidence,
+                    }
+                else:
+                    # Regular artifact - encode content as base64
+                    if isinstance(artifact.content, bytes):
+                        base64_data = base64.b64encode(artifact.content).decode('utf-8')
+                    else:
+                        base64_data = base64.b64encode(artifact.content.encode('utf-8')).decode('utf-8')
+
                     base_msg = {
                         "type": "file",
                         "filename": artifact.filename,
@@ -148,22 +177,27 @@ class ResponseHandler:
                         "source": artifact.source,
                         "confidence": artifact.confidence,
                     }
+
+                if artifact.confidence >= self.CONFIDENCE_THRESHOLD:
+                    # High confidence - send as file
                     msg = builder.build_message(base_msg, context)
-                    await websocket.send_json(msg)
-                    response_info["artifacts_sent"] += 1
+                    try:
+                        logger.info(f"[POSTPROCESS] Sending file: {artifact.filename}, storage_key={storage_key}")
+                        await websocket.send_json(msg)
+                        response_info["artifacts_sent"] += 1
+                    except Exception as e:
+                        logger.error(f"[POSTPROCESS] Failed to send file artifact: {e}")
+                        # Don't re-raise - continue with other artifacts
                 else:
                     # Low confidence - send as suggestion
-                    base_msg = {
-                        "type": "file_suggestion",
-                        "filename": artifact.filename,
-                        "base64_data": base64_data,
-                        "source": artifact.source,
-                        "confidence": artifact.confidence,
-                        "needs_confirmation": True,
-                    }
+                    base_msg["type"] = "file_suggestion"
+                    base_msg["needs_confirmation"] = True
                     msg = builder.build_message(base_msg, context)
-                    await websocket.send_json(msg)
-                    response_info["artifacts_suggested"] += 1
+                    try:
+                        await websocket.send_json(msg)
+                        response_info["artifacts_suggested"] += 1
+                    except Exception as e:
+                        logger.error(f"[POSTPROCESS] Failed to send file suggestion: {e}")
 
         return response_info
 

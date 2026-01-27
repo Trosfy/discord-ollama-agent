@@ -40,11 +40,12 @@ from app.core import (
     Executor,
 )
 from app.core.router import RoutingResult
-from app.core.context import Message, UserProfile
+from app.core.context import Message, UserProfile, UserConfig
 from app.core.interfaces.services import IVRAMOrchestrator
 from app.core.interfaces.storage import IFileStorage
 from app.core.interfaces.queue import QueuedRequest, UserTier
 from app.services import QueueManager, CircuitBreakerRegistry, VisibilityMonitor
+from app.adapters.websocket.factory import get_message_builder
 
 # Preprocessing imports
 from app.preprocessing import (
@@ -446,6 +447,7 @@ async def websocket_chat(
     session_id: Optional[str] = Query(default=None, description="Existing session ID for reconnection"),
     user_id: Optional[str] = Query(default=None, description="User ID"),
     interface: Optional[str] = Query(default="web", description="Interface type: web, discord"),
+    token: Optional[str] = Query(default=None, description="Authentication token (JWT for web, HMAC for discord)"),
 ):
     """
     WebSocket endpoint for chat with preprocessing/postprocessing pipeline.
@@ -454,6 +456,7 @@ async def websocket_chat(
         session_id: Optional existing session ID for reconnection
         user_id: User identifier (defaults to 'default')
         interface: Interface type - 'web' or 'discord' (defaults to 'web')
+        token: Authentication token (JWT for web, HMAC signature for discord)
 
     Pipeline:
     1. PREPROCESSING
@@ -491,6 +494,28 @@ async def websocket_chat(
         "metadata": {...}
     }
     """
+    # Authentication check before accepting connection
+    from app.core.auth import get_auth_strategy, is_auth_required
+
+    if is_auth_required(interface or "web"):
+        strategy = get_auth_strategy(interface or "web")
+        auth_result = await strategy.authenticate(
+            token=token,
+            interface=interface or "web",
+            user_id=user_id,
+            bot_id=user_id if interface == "discord" else None,
+        )
+
+        if not auth_result.authenticated:
+            await websocket.close(code=4001, reason=auth_result.error or "Authentication failed")
+            logger.warning(f"WS auth failed for {interface}: {auth_result.error}")
+            return
+
+        # Use authenticated user_id if available
+        if auth_result.user_id:
+            user_id = auth_result.user_id
+        logger.info(f"WS authenticated: user={user_id}, interface={interface}")
+
     await websocket.accept()
 
     # Default user_id if not provided
@@ -624,6 +649,19 @@ async def websocket_chat(
                     context.discord_message_id = metadata.get("message_id")
                     context.discord_guild_id = metadata.get("guild_id")
 
+                # Parse user_config from message (for model/temperature overrides)
+                user_config_data = data.get("user_config", {})
+                user_config: Optional[UserConfig] = None
+                if user_config_data:
+                    user_config = UserConfig(
+                        model=user_config_data.get("model"),
+                        temperature=user_config_data.get("temperature"),
+                        thinking_enabled=user_config_data.get("thinking_enabled"),
+                        enable_web_search=user_config_data.get("enable_web_search"),
+                    )
+                    context.user_config = user_config
+                    logger.info(f"User config received: model={user_config.model}, temp={user_config.temperature}")
+
                 # Idempotency check - skip duplicate messages
                 if message_id:
                     if message_id in processed_message_ids:
@@ -634,12 +672,19 @@ async def websocket_chat(
                 if not content and not file_uploads:
                     continue
 
-                # If no content but there are file uploads, generate default content
+                # If no content but there are file uploads, generate analysis-oriented content
+                # This ensures routing treats file-only uploads as analysis requests, not generation
                 if not content and file_uploads:
                     file_names = [f.get("filename", "file") for f in file_uploads]
-                    content = f"[Uploaded: {', '.join(file_names)}]"
+                    content = f"Analyze this file: {', '.join(file_names)}"
 
                 try:
+                    # ==========================================================
+                    # RESET REQUEST-SCOPED STATE
+                    # ==========================================================
+                    # Clear generated_images from previous request to prevent duplicates
+                    context.generated_images.clear()
+
                     # ==========================================================
                     # FILE EXTRACTION (before message persistence)
                     # ==========================================================
@@ -779,10 +824,10 @@ async def websocket_chat(
                         sanitize_task, detect_task
                     )
 
-                    logger.debug(
-                        f"Sanitized: intent='{sanitized.intent}', "
-                        f"action_type={sanitized.action_type}, "
-                        f"artifact_requested={artifact_requested}"
+                    logger.info(
+                        f"Preprocessing: action_type={sanitized.action_type}, "
+                        f"artifact_requested={artifact_requested}, "
+                        f"expected_filename={sanitized.expected_filename}"
                     )
 
                     # Include raw content for modify actions
@@ -806,15 +851,57 @@ async def websocket_chat(
                     context.expected_filename = sanitized.expected_filename
 
                     # ==========================================================
-                    # ROUTING PHASE
+                    # MODEL VALIDATION (before routing)
                     # ==========================================================
 
-                    # Route using clean intent with extracted file content
-                    routing_result = await router.route(
-                        sanitized.intent,
-                        {"user_id": user_id},
-                        file_context=file_context,
-                    )
+                    if user_config and user_config.model:
+                        orchestrator: IVRAMOrchestrator = container.resolve(IVRAMOrchestrator)
+
+                        # Check if model exists in available_models
+                        model_caps = orchestrator.get_model_capabilities(user_config.model)
+
+                        if not model_caps:
+                            # Model not in profile - return error with available options
+                            available_models = await orchestrator.list_available_models()
+                            await websocket.send_json({
+                                "type": "error",
+                                "error": f"Model '{user_config.model}' not available in current profile.",
+                                "available_models": available_models,
+                            })
+                            continue  # Skip this message, wait for next
+
+                        # Capability validation warnings
+                        if user_config.thinking_enabled and not model_caps.supports_thinking:
+                            await websocket.send_json({
+                                "type": "warning",
+                                "warning": f"Model '{user_config.model}' does not support extended thinking. Proceeding without thinking.",
+                            })
+                            user_config.thinking_enabled = False  # Silently disable
+
+                    # ==========================================================
+                    # ROUTING PHASE (with interceptor)
+                    # ==========================================================
+
+                    # INTERCEPTOR: Check for user model override (bypass LLM classification)
+                    if user_config and user_config.model:
+                        routing_result = RoutingResult(
+                            type="agent",
+                            name="general",
+                            reason=f"User selected model: {user_config.model}",
+                            confidence=1.0,
+                            fallback=False,
+                        )
+                        logger.info(f"Routing intercepted - user model: {user_config.model}")
+                    else:
+                        # Normal routing - router stays pure (SRP)
+                        # Use file_uploads (user sent) not file_refs (extracted) for attachment detection
+                        # This ensures correct routing even if extraction fails
+                        routing_result = await router.route(
+                            sanitized.intent,
+                            {"user_id": user_id},
+                            file_context=file_context,
+                            has_attachments=bool(file_uploads),
+                        )
 
                     # Send routing info
                     await websocket.send_json({
@@ -856,17 +943,21 @@ async def websocket_chat(
                         "position": position,
                     })
 
-                    # Wait for result (timeout handled by queue worker)
+                    # Wait for result (timeout based on classification)
+                    # IMAGE classification uses image_timeout (900s), others use standard timeouts
+                    queue_timeout = config.queue.get_timeout_for_type(
+                        routing_result.type, routing_result.classification
+                    )
                     try:
                         result = await queue_manager.wait_for_result(
                             request_id,
-                            timeout=config.execution_timeout,
+                            timeout=queue_timeout,
                         )
                     except TimeoutError as e:
                         logger.error(f"Queue timeout for {routing_result.name}: {e}")
                         await websocket.send_json({
                             "type": "error",
-                            "content": f"Request timed out after {config.execution_timeout}s",
+                            "content": f"Request timed out after {queue_timeout}s",
                         })
                         continue  # Skip to next message
                     except RuntimeError as e:
@@ -901,8 +992,8 @@ async def websocket_chat(
                     # Create response handler and send
                     handler = ResponseHandler(formatter, artifact_chain)
 
-                    # Agents stream content via WebSocket - skip duplicate response message
-                    was_streamed = routing_result.type == "agent" and context.websocket
+                    # Both agents AND graphs stream content via WebSocket - skip duplicate response message
+                    was_streamed = routing_result.type in ("agent", "graph") and context.websocket
 
                     await handler.send_response(
                         result=result,
@@ -911,6 +1002,16 @@ async def websocket_chat(
                         expected_filename=context.expected_filename,
                         streamed=was_streamed,
                     )
+
+                    # Send completion metrics via interface-specific builder
+                    # Builder returns None for interfaces that don't display metrics (e.g., Discord)
+                    if context.websocket:
+                        builder = get_message_builder(context)
+                        metrics_msg = builder.build_completion_metrics(
+                            result.metadata or {}, context
+                        )
+                        if metrics_msg:
+                            await websocket.send_json(metrics_msg)
 
                 except Exception as e:
                     logger.error(f"Error processing message: {e}", exc_info=True)

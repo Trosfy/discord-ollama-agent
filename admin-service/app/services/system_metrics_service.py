@@ -174,7 +174,7 @@ class SystemMetricsService:
             from app.backend_registry import BackendRegistry
 
             loaded_models = []
-            logger.info("🔍 Fetching loaded models from backends...")
+            logger.debug("🔍 Fetching loaded models from backends...")
 
             # Iterate over all enabled backends
             for backend in BackendRegistry.get_enabled_backends():
@@ -182,7 +182,7 @@ class SystemMetricsService:
                     if backend.type == "ollama":
                         # For Ollama: Query /api/ps to get ONLY loaded models
                         ps_url = f"{backend.endpoint}/api/ps"
-                        logger.info(f"Querying Ollama loaded models at {ps_url}")
+                        logger.debug(f"Querying Ollama loaded models at {ps_url}")
                         response = await self.http_client.get(ps_url)
 
                         if response.status_code == 200:
@@ -205,14 +205,14 @@ class SystemMetricsService:
                                     })
 
                             loaded_models.extend(models)
-                            logger.info(f"✅ Found {len(models)} loaded models in Ollama: {[m['name'] for m in models]}")
+                            logger.debug(f"✅ Found {len(models)} loaded models in Ollama: {[m['name'] for m in models]}")
                         else:
                             logger.warning(f"⚠️ Ollama /api/ps returned status {response.status_code}")
 
                     else:
                         # For other backends (SGLang): Use original logic
                         url = f"{backend.endpoint}{backend.models_endpoint}"
-                        logger.info(f"Querying {backend.type} at {url}")
+                        logger.debug(f"Querying {backend.type} at {url}")
                         response = await self.http_client.get(url)
 
                         if response.status_code == 200:
@@ -231,14 +231,14 @@ class SystemMetricsService:
                                     model["can_toggle"] = False
 
                             loaded_models.extend(models)
-                            logger.info(f"✅ Found {len(models)} models in {backend.type}: {[m['name'] for m in models]}")
+                            logger.debug(f"✅ Found {len(models)} models in {backend.type}: {[m['name'] for m in models]}")
                         else:
                             logger.warning(f"⚠️ {backend.type} returned status {response.status_code}")
 
                 except Exception as e:
                     logger.warning(f"❌ Failed to fetch models from {backend.type}: {e}")
 
-            logger.info(f"📊 Total loaded models: {len(loaded_models)}")
+            logger.debug(f"📊 Total loaded models: {len(loaded_models)}")
             return loaded_models
 
         except Exception as e:

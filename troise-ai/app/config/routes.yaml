@@ -60,3 +60,15 @@ routes:
     examples:
       - "Let me dump my thoughts about..."
       - "I need to organize my ideas"
+
+  IMAGE:
+    description: "Image generation, creating pictures, artwork, visualizations"
+    agent:
+      name: image_generator
+    graph:
+      name: image_graph
+    examples:
+      - "Generate an image of a cat"
+      - "Create a picture of a mountain landscape"
+      - "Draw a cyberpunk cityscape"
+      - "Make a wallpaper with..."

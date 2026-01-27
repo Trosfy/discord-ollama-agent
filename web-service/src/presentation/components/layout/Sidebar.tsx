@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConversationStore } from "@/stores/conversationStore";
+import { useAuthStore } from "@/stores/authStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -53,6 +54,7 @@ export function Sidebar({ isOpen, onToggle, isMobile }: SidebarProps) {
     deleteConversation,
     setCurrentConversation,
   } = useConversationStore();
+  const { user } = useAuthStore();
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
@@ -73,13 +75,14 @@ export function Sidebar({ isOpen, onToggle, isMobile }: SidebarProps) {
       setCurrentConversation(emptyNewChat.id);
       router.push(`/chat/${emptyNewChat.id}`);
     } else {
-      // Create new conversation
+      // Create new conversation with empty messages array
       const newConversation = {
         id: Date.now().toString(),
         title: "New Chat",
         createdAt: new Date(),
         updatedAt: new Date(),
         archived: false,
+        messages: [],
       };
       addConversation(newConversation);
       router.push(`/chat/${newConversation.id}`);
@@ -91,13 +94,13 @@ export function Sidebar({ isOpen, onToggle, isMobile }: SidebarProps) {
   const handleDeleteConversation = async (id: string, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     // Show loading state
     setDeletingId(id);
-    
+
     try {
       // Call backend to delete from DynamoDB
-      const result = await closeConversation(id);
+      const result = await closeConversation(id, user?.id || "anonymous");
       
       if (result.success) {
         // Remove from local store

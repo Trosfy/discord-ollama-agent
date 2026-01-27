@@ -33,8 +33,8 @@ class TestGeneratorAgent(BaseAgent):
 
     name = "test_generator"
     category = "code"
-    # Uses brain_search for patterns, read_file for existing tests
-    tools = ["brain_search", "read_file"]
+    # Uses brain_search for patterns
+    tools = ["brain_search"]
 
     def __init__(
         self,

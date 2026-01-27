@@ -175,16 +175,6 @@ export function ChatMessage({
       {/* Action bar - compact icons like Open WebUI */}
       {showActions && (
         <div className="flex items-center gap-4 mt-2 text-muted-foreground/70 text-xs">
-          {/* Metrics - Display output tokens, calculate TPS with total tokens */}
-          {(message.outputTokens || message.tokensUsed) && (
-            <span className="tabular-nums">
-              {message.outputTokens || message.tokensUsed} tokens
-              {message.generationTime && message.generationTime > 0 && (
-                <> · {((message.totalTokensGenerated || message.outputTokens || message.tokensUsed || 0) / message.generationTime).toFixed(1)} t/s</>
-              )}
-            </span>
-          )}
-
           {/* Action icons - Direct clickable SVGs */}
           {copied ? (
             <Check className="h-4 w-4 text-green-500" />
@@ -200,6 +190,16 @@ export function ChatMessage({
               onClick={onRegenerate}
               className="h-4 w-4 cursor-pointer hover:text-foreground transition-colors"
             />
+          )}
+
+          {/* Token metrics */}
+          {message.outputTokens && (
+            <span className="text-muted-foreground/50">
+              {message.outputTokens} tokens
+              {message.generationTime && message.totalTokensGenerated && (
+                <> · {(message.totalTokensGenerated / message.generationTime).toFixed(1)} t/s</>
+              )}
+            </span>
           )}
         </div>
       )}

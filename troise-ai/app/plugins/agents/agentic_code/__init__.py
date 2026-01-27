@@ -30,7 +30,7 @@ PLUGIN = {
     "factory": create_agentic_code_agent,
     "description": "Writes, modifies, and tests code with file I/O capabilities",
     "category": "code",
-    "tools": ["brain_search", "read_file", "write_file", "run_code"],  # + universal tools
+    "tools": ["write_file"],  # + universal tools (write_file filtered by IOutputStrategy for Discord)
     "config": {
         "model_role": "code",  # Use profile's code_model
         "timeout": 600,  # 10 minutes max for complex code tasks

@@ -282,7 +282,7 @@ export function useFileAttachments(
       // Update attachment statuses based on result
       setAttachments((prev) =>
         prev.map((a) => {
-          const fileRef = result.file_refs.find(
+          const fileRef = result.files.find(
             (r) => r.filename === a.name
           );
           const error = result.errors.find(
@@ -294,7 +294,6 @@ export function useFileAttachments(
               ...a,
               status: "uploaded" as const,
               progress: 100,
-              remoteUrl: fileRef.url,
             };
           } else if (error) {
             return {
@@ -308,7 +307,7 @@ export function useFileAttachments(
       );
 
       // Return file refs for chat
-      return toChatFileRefs(result.file_refs);
+      return toChatFileRefs(result.files);
     } catch (error) {
       // Mark all as error
       setAttachments((prev) =>

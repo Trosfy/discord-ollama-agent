@@ -13,7 +13,6 @@ FOCUS AREAS:
 
 TOOLS:
 - read_file(path) - Read source files, configs, tests
-- brain_search(query) - Search project documentation and notes
 
 EXPLORATION STRATEGY:
 1. Identify relevant files from the request

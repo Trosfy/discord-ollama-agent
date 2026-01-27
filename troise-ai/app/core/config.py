@@ -37,7 +37,11 @@ class ModelCapabilities:
     name: str
     backend: BackendConfig
     vram_size_gb: float
+    model_type: str = "llm"  # "llm" | "diffusion"
     priority: str = "NORMAL"  # CRITICAL, HIGH, NORMAL, LOW
+
+    # Lifecycle management
+    api_managed: bool = True  # True = load/unload via API, False = container-managed
 
     # Capability flags
     supports_tools: bool = False
@@ -223,10 +227,12 @@ class QueueConfig:
     default_timeout_seconds: int = 300  # 5 minutes
     skill_timeout_seconds: int = 120    # 2 minutes
     agent_timeout_seconds: int = 600    # 10 minutes
+    image_timeout_seconds: int = 900    # 15 minutes for image generation
     timeout_buffer_seconds: int = 60    # Extra buffer for cleanup
 
     # Visibility and cleanup
     visibility_timeout_seconds: int = 300  # Mark as stuck after this
+    image_visibility_timeout_seconds: int = 900  # Match image timeout (no early requeue)
     visibility_check_interval_seconds: int = 30  # Check for stuck requests every 30s
     result_ttl_seconds: int = 300  # Keep results for 5 minutes
 
@@ -248,8 +254,10 @@ class QueueConfig:
             default_timeout_seconds=data.get("default_timeout_seconds", 300),
             skill_timeout_seconds=data.get("skill_timeout_seconds", 120),
             agent_timeout_seconds=data.get("agent_timeout_seconds", 600),
+            image_timeout_seconds=data.get("image_timeout_seconds", 900),
             timeout_buffer_seconds=data.get("timeout_buffer_seconds", 60),
             visibility_timeout_seconds=data.get("visibility_timeout_seconds", 300),
+            image_visibility_timeout_seconds=data.get("image_visibility_timeout_seconds", 900),
             visibility_check_interval_seconds=data.get("visibility_check_interval_seconds", 30),
             result_ttl_seconds=data.get("result_ttl_seconds", 300),
             max_retries=data.get("max_retries", 2),
@@ -257,13 +265,36 @@ class QueueConfig:
             alert_wait_time_seconds=data.get("alert_wait_time_seconds", 60),
         )
 
-    def get_timeout_for_type(self, routing_type: str) -> int:
-        """Get timeout based on routing type (skill or agent)."""
+    def get_timeout_for_type(self, routing_type: str, classification: str = None) -> int:
+        """Get timeout based on routing type and optional classification.
+
+        Args:
+            routing_type: Type of route - "skill", "agent", or "graph"
+            classification: Optional request classification (e.g., "IMAGE")
+
+        Returns:
+            Appropriate timeout in seconds.
+        """
+        if classification == "IMAGE":
+            return self.image_timeout_seconds
         if routing_type == "skill":
             return self.skill_timeout_seconds
         elif routing_type == "agent":
             return self.agent_timeout_seconds
         return self.default_timeout_seconds
+
+    def get_visibility_timeout_for_classification(self, classification: str = None) -> int:
+        """Get visibility timeout based on classification.
+
+        Args:
+            classification: Request classification (e.g., "IMAGE", "CODE", "GENERAL")
+
+        Returns:
+            Visibility timeout in seconds.
+        """
+        if classification == "IMAGE":
+            return self.image_visibility_timeout_seconds
+        return self.visibility_timeout_seconds
 
 
 # =============================================================================
@@ -350,6 +381,7 @@ class Config:
         - OLLAMA_HOST overrides backends.ollama.host
         - SGLANG_ENDPOINT overrides backends.sglang.host
         - VLLM_HOST overrides backends.vllm.host
+        - COMFYUI_HOST overrides backends.comfyui.host
         """
         backends_config = self._data.get("backends", {})
 
@@ -358,6 +390,7 @@ class Config:
             "ollama": os.getenv("OLLAMA_HOST"),
             "sglang": os.getenv("SGLANG_ENDPOINT"),
             "vllm": os.getenv("VLLM_HOST"),
+            "comfyui": os.getenv("COMFYUI_HOST"),
         }
 
         for name, config in backends_config.items():

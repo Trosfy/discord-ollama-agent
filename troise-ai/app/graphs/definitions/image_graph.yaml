@@ -1,0 +1,27 @@
+# Image Graph Definition
+# Single-node graph for IMAGE classification
+#
+# Handles image generation requests using FLUX 2.dev.
+# The image_generator agent crafts prompts and calls generate_image tool.
+
+name: image_graph
+domain: image
+description: "IMAGE classification - image generation using FLUX 2.dev"
+
+entry_node: image_generator
+
+# Max loops set to 2 to allow for retry if generation fails
+max_loops: 2
+
+nodes:
+  image_generator:
+    agent: image_generator
+    tools:
+      - generate_image
+    tool_limits:
+      generate_image: 3  # Allow multiple generations per request
+    streaming: true
+
+edges:
+  image_generator:
+    - to: END

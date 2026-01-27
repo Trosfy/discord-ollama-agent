@@ -16,12 +16,10 @@ import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Set, Any, Union
-
-from strands.models.ollama import OllamaModel
-from strands.models.openai import OpenAIModel
+from typing import Dict, List, Optional, Set, Any, Union, Tuple
 
 from app.core.config import Config, ModelCapabilities, ModelPriority
+from app.core.models import ExtendedOllamaModel, ExtendedOpenAIModel
 from app.core.interfaces import IConfigProfile
 from .backend_manager import BackendManager
 from .model_factory import ModelFactory
@@ -184,7 +182,8 @@ class VRAMOrchestrator:
         Get the default model for a role from the current profile.
 
         Args:
-            role: Model role - "general", "research", "code", "braindump", "router", "vision", "embedding"
+            role: Model role - "general", "research", "code", "braindump", "router",
+                  "vision", "embedding", "image_handler", "image"
 
         Returns:
             Model ID from the profile for the specified role.
@@ -198,6 +197,8 @@ class VRAMOrchestrator:
             "router": profile.router_model,
             "vision": profile.vision_model,
             "embedding": profile.embedding_model,
+            "image_handler": profile.image_handler_model,
+            "image": profile.image_model,
         }
         return role_map.get(role, profile.general_model)
 
@@ -225,6 +226,50 @@ class VRAMOrchestrator:
             if model.name == model_id:
                 return model
         return None
+
+    def get_model_capabilities(self, model_id: str) -> Optional[ModelCapabilities]:
+        """
+        Get capabilities for a model if it exists in the current profile.
+
+        Public interface for model validation when user specifies a model
+        via user_config. Used by main.py to validate user model selection
+        before routing/execution.
+
+        Args:
+            model_id: The model identifier to look up.
+
+        Returns:
+            ModelCapabilities if found, None otherwise.
+        """
+        return self._get_model_capabilities(model_id)
+
+    async def list_available_models(self) -> List[Dict[str, Any]]:
+        """
+        List all models available in the current profile with their capabilities.
+
+        Used by /models endpoint for web-service dropdown population.
+        Returns model info including capabilities for UI hints (e.g., show
+        thinking toggle only for models with supports_thinking=true).
+
+        Returns:
+            List of model info dicts including name, capabilities, and settings.
+        """
+        return [
+            {
+                "name": m.name,
+                "vram_size_gb": m.vram_size_gb,
+                "priority": m.priority,
+                "backend": {"type": m.backend.type},
+                "api_managed": m.api_managed,
+                "supports_tools": m.supports_tools,
+                "supports_vision": m.supports_vision,
+                "supports_thinking": m.supports_thinking,
+                "thinking_format": m.thinking_format,
+                "default_thinking_level": m.default_thinking_level,
+                "context_window": m.context_window,
+            }
+            for m in self._profile.available_models
+        ]
 
     def is_loaded(self, model_id: str) -> bool:
         """
@@ -273,6 +318,8 @@ class VRAMOrchestrator:
             MemoryError: If there's not enough VRAM and eviction failed.
         """
         async with self._lock:
+            logger.debug(f"request_load: {model_id}, registry={list(self._registry.keys())}")
+
             # Already in our registry?
             if model_id in self._registry:
                 self._registry[model_id].last_accessed = datetime.now()
@@ -317,13 +364,32 @@ class VRAMOrchestrator:
                 )
                 freed = await self._evict_for_space(required_gb)
                 if not freed:
-                    # Re-check after eviction
-                    available_gb = self._get_available_ram_gb()
-                    if required_gb > available_gb:
-                        error = f"Cannot free {required_gb:.1f}GB for '{model_id}', only {available_gb:.1f}GB available"
-                        logger.error(error)
-                        self._profile_manager.record_load_failure(model_id, error)
-                        raise MemoryError(error)
+                    # Memory release can be async (especially ComfyUI /free)
+                    # FLUX model (~20GB) can take 10-20 seconds to fully release
+                    # Retry with delays to allow memory to be properly released
+                    max_retries = 15
+                    retry_delay = 2.0  # seconds (total: 30s max wait)
+                    for retry in range(max_retries):
+                        await asyncio.sleep(retry_delay)
+                        available_gb = self._get_available_ram_gb()
+                        if required_gb <= available_gb:
+                            logger.info(
+                                f"Memory available after {retry + 1} retries: "
+                                f"{available_gb:.1f}GB (need {required_gb:.1f}GB)"
+                            )
+                            break
+                        logger.debug(
+                            f"Waiting for memory release (retry {retry + 1}/{max_retries}): "
+                            f"{available_gb:.1f}GB available, need {required_gb:.1f}GB"
+                        )
+                    else:
+                        # All retries exhausted
+                        available_gb = self._get_available_ram_gb()
+                        if required_gb > available_gb:
+                            error = f"Cannot free {required_gb:.1f}GB for '{model_id}', only {available_gb:.1f}GB available after {max_retries} retries"
+                            logger.error(error)
+                            self._profile_manager.record_load_failure(model_id, error)
+                            raise MemoryError(error)
 
             # Mark as loading
             self._loading.add(model_id)
@@ -336,7 +402,8 @@ class VRAMOrchestrator:
                     keep_alive = model_caps.backend.options.get("keep_alive", "10m")
 
                 # Use BackendManager to actually load
-                logger.debug(f"Load requested: {model_id} ({required_gb:.1f}GB), usage={self.current_usage_gb:.1f}GB/{self._vram_limit_gb:.1f}GB")
+                backend_type = model_caps.backend.type if model_caps.backend else "unknown"
+                logger.info(f"Loading model via backend: {model_id} (type={backend_type}, size={required_gb:.1f}GB)")
                 success = await self._backend_manager.load_model(model_id, keep_alive)
                 load_ms = (time.time() - load_start) * 1000
 
@@ -661,13 +728,13 @@ class VRAMOrchestrator:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         additional_args: Optional[Dict[str, Any]] = None,
-    ) -> Union[OllamaModel, OpenAIModel]:
+    ) -> Union[ExtendedOllamaModel, ExtendedOpenAIModel]:
         """
         Get a Strands-compatible Model for the specified model.
 
         This is the primary interface for agents and skills to get models.
         It ensures the model is loaded in VRAM and returns a configured
-        Strands Model instance (OllamaModel or OpenAIModel).
+        Strands Model instance (ExtendedOllamaModel or ExtendedOpenAIModel).
 
         Args:
             model_id: The model identifier (e.g., "magistral:24b").
@@ -679,7 +746,7 @@ class VRAMOrchestrator:
                 If None, auto-resolves from model capabilities.
 
         Returns:
-            OllamaModel or OpenAIModel configured for the specified model.
+            ExtendedOllamaModel or ExtendedOpenAIModel configured for the specified model.
 
         Raises:
             ValueError: If model is not in the current profile.
@@ -800,3 +867,208 @@ class VRAMOrchestrator:
             # else: keep boolean as-is
 
         return result
+
+    async def get_diffusion_pipeline(self, model_id: str) -> Any:
+        """
+        Get a diffusion pipeline for image generation.
+
+        Ensures the model is loaded in VRAM and returns the pipeline.
+        Only works for models with model_type="diffusion".
+
+        Args:
+            model_id: The diffusion model identifier (e.g., "flux2-dev-nvfp4").
+
+        Returns:
+            Diffusion pipeline (e.g., Flux2Pipeline).
+
+        Raises:
+            ValueError: If model is not in profile or not a diffusion model.
+            MemoryError: If there's not enough VRAM and eviction failed.
+            RuntimeError: If diffusion backend is not available.
+
+        Example:
+            pipe = await orchestrator.get_diffusion_pipeline("flux2-dev-nvfp4")
+            image = pipe(prompt="A cat", num_inference_steps=28).images[0]
+        """
+        # Validate model is in profile
+        model_caps = self._get_model_capabilities(model_id)
+        if not model_caps:
+            raise ValueError(f"Model '{model_id}' not in profile '{self._profile.profile_name}'")
+
+        # Validate model is diffusion type
+        if model_caps.model_type != "diffusion":
+            raise ValueError(
+                f"Model '{model_id}' is not a diffusion model "
+                f"(model_type='{model_caps.model_type}')"
+            )
+
+        # Ensure model is loaded (handles eviction)
+        await self.request_load(model_id)
+
+        # Get pipeline from DiffusionClient
+        diffusion_client = self._backend_manager.get_client("diffusion")
+        if not diffusion_client:
+            raise RuntimeError("Diffusion backend not configured")
+
+        if not hasattr(diffusion_client, 'get_pipeline'):
+            raise RuntimeError("Diffusion client does not support get_pipeline()")
+
+        pipeline = diffusion_client.get_pipeline(model_id)
+        if pipeline is None:
+            raise RuntimeError(f"Pipeline for '{model_id}' not found after loading")
+
+        return pipeline
+
+    def get_diffusion_client(self, model_id: str) -> Any:
+        """
+        Get ComfyUI client for diffusion model image generation.
+
+        Used for NVFP4 models that run via ComfyUI backend instead of
+        in-process diffusers. Returns the ComfyUIClient for direct HTTP
+        communication with the ComfyUI server.
+
+        Args:
+            model_id: Diffusion model identifier (e.g., "flux2-dev-nvfp4").
+
+        Returns:
+            ComfyUIClient instance for image generation.
+
+        Raises:
+            ValueError: If model not in profile or not a diffusion model.
+            RuntimeError: If ComfyUI backend not configured.
+
+        Example:
+            comfyui = orchestrator.get_diffusion_client("flux2-dev-nvfp4")
+            image_bytes = await comfyui.generate_image(
+                prompt="A cat",
+                width=1024,
+                height=1024,
+                steps=28,
+            )
+        """
+        # Validate model is in profile
+        model_caps = self._get_model_capabilities(model_id)
+        if not model_caps:
+            raise ValueError(f"Model '{model_id}' not in profile '{self._profile.profile_name}'")
+
+        # Validate model is diffusion type
+        if model_caps.model_type != "diffusion":
+            raise ValueError(
+                f"Model '{model_id}' is not a diffusion model "
+                f"(model_type='{model_caps.model_type}')"
+            )
+
+        # Get ComfyUI client from backend manager
+        comfyui_client = self._backend_manager.get_client("comfyui")
+        if not comfyui_client:
+            raise RuntimeError("ComfyUI backend not configured")
+
+        return comfyui_client
+
+    async def get_diffusion_context(self, model_id: str) -> Tuple[Any, Dict[str, Any]]:
+        """
+        Get ComfyUI client and workflow config for diffusion model.
+
+        Ensures VRAM is available by calling request_load(), which may evict
+        LLMs if needed. The diffusion model is registered in the registry
+        for future eviction when LLMs need to load.
+
+        Returns both the client and the model-specific workflow configuration
+        from ModelCapabilities.options. This follows DIP by keeping model
+        configuration in the profile rather than hardcoded in the client.
+
+        Args:
+            model_id: Diffusion model identifier (e.g., "flux2-dev-nvfp4").
+
+        Returns:
+            Tuple of (ComfyUIClient, workflow_config dict).
+
+        Raises:
+            ValueError: If model not in profile or not a diffusion model.
+            RuntimeError: If ComfyUI backend not configured.
+            MemoryError: If there's not enough VRAM and eviction failed.
+
+        Example:
+            comfyui, workflow_config = await orchestrator.get_diffusion_context("flux2-dev-nvfp4")
+            image_bytes = await comfyui.generate_image(
+                prompt="A cat",
+                width=1024,
+                height=1024,
+                steps=28,
+                workflow_config=workflow_config,
+            )
+        """
+        # Validate model is in profile
+        model_caps = self._get_model_capabilities(model_id)
+        if not model_caps:
+            raise ValueError(f"Model '{model_id}' not in profile '{self._profile.profile_name}'")
+
+        # Validate model is diffusion type
+        if model_caps.model_type != "diffusion":
+            raise ValueError(
+                f"Model '{model_id}' is not a diffusion model "
+                f"(model_type='{model_caps.model_type}')"
+            )
+
+        # Request VRAM, evict LLMs if needed
+        # This registers the model in the registry for future eviction
+        success = await self.request_load(model_id)
+        if not success:
+            raise MemoryError(f"Failed to load diffusion model '{model_id}' - VRAM unavailable")
+
+        # Get ComfyUI client from backend manager
+        comfyui_client = self._backend_manager.get_client("comfyui")
+        if not comfyui_client:
+            raise RuntimeError("ComfyUI backend not configured")
+
+        # Get workflow config from model options
+        workflow_config = dict(model_caps.options.get("workflow", {}))
+
+        # Add model_id for tracking (used by generate_image for logging)
+        workflow_config["model_id"] = model_id
+
+        return comfyui_client, workflow_config
+
+    async def warmup_diffusion_model(self, model_id: Optional[str] = None) -> bool:
+        """
+        Pre-load diffusion model into VRAM by triggering a warmup workflow.
+
+        Calls request_load() via get_diffusion_context() to ensure VRAM is
+        available (evicting LLMs if needed). Then submits a tiny 64x64 image
+        to trigger actual model loading in ComfyUI.
+
+        Args:
+            model_id: Diffusion model ID. If None, uses profile's default image model.
+
+        Returns:
+            True if warmup succeeded, False otherwise.
+
+        Example:
+            # Warmup default image model from profile
+            success = await orchestrator.warmup_diffusion_model()
+
+            # Warmup specific model
+            success = await orchestrator.warmup_diffusion_model("flux2-dev-nvfp4")
+        """
+        try:
+            # Use default image model if not specified
+            if model_id is None:
+                model_id = self.get_profile_model("image")
+
+            # Get client and workflow config (now async, calls request_load)
+            comfyui, workflow_config = await self.get_diffusion_context(model_id)
+            if not comfyui:
+                logger.warning(f"No ComfyUI client for model '{model_id}'")
+                return False
+
+            # Delegate to ComfyUIClient.warmup()
+            success = await comfyui.warmup(workflow_config)
+            if success:
+                logger.info(f"Diffusion model warmup complete ({model_id})")
+            else:
+                logger.warning(f"Diffusion model warmup failed ({model_id})")
+            return success
+
+        except Exception as e:
+            logger.warning(f"Diffusion model warmup skipped: {e}")
+            return False

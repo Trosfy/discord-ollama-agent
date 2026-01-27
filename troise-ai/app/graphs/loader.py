@@ -205,6 +205,7 @@ class GraphLoader:
         state_key = node_def.get("state_key")
         tool_override = node_def.get("tools")  # Optional per-node tool list from YAML
         tool_limits = node_def.get("tool_limits")  # Optional tool call limits (e.g., {"web_fetch": 3})
+        streaming = node_def.get("streaming", True)  # Whether node streams output (default: True)
 
         # Resolve agent from container
         agent = self._resolve_agent(agent_name)
@@ -225,6 +226,7 @@ class GraphLoader:
             state_key=state_key,
             tool_override=tool_override,
             tool_limits=tool_limits,
+            streaming=streaming,
         )
 
         # Override name if different from agent name
@@ -237,6 +239,8 @@ class GraphLoader:
             config_parts.append(f"tools={tool_override}")
         if tool_limits:
             config_parts.append(f"tool_limits={tool_limits}")
+        if not streaming:
+            config_parts.append("streaming=False")
         logger.debug(f"Built agent node '{node_name}' with {', '.join(config_parts)}")
         return node
 

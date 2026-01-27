@@ -307,11 +307,24 @@ class GraphExecutor:
                 # First node gets original input, subsequent nodes get previous output
                 node_input = input_text if not results else results[-1].content
 
+                # Log input for debugging (helps identify if thinking tokens are leaking)
+                logger.debug(
+                    f"Node '{current_node}' input: len={len(node_input)}, "
+                    f"preview='{node_input[:200]}{'...' if len(node_input) > 200 else ''}'"
+                )
+
+                # Determine stream handler for this node
+                # Non-streaming nodes (internal nodes like code_reviewer) don't stream to user
+                node_stream_handler = stream_handler if getattr(node, 'streaming', True) else None
+                if node_stream_handler is None and stream_handler is not None:
+                    logger.debug(f"Node '{current_node}' has streaming disabled - output buffered")
+
                 result = await node.execute(
                     state=state,
                     context=context,
                     input_text=node_input,
                     tool_factory=tool_factory,
+                    stream_handler=node_stream_handler,
                 )
 
             except Exception as e:

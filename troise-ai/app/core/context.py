@@ -21,6 +21,26 @@ class Message:
 
 
 @dataclass
+class UserConfig:
+    """User-provided configuration overrides from web-service.
+
+    Allows users to override default model selection and agent behavior
+    through the web interface. When model is specified, routing is bypassed
+    (DIRECT route) and the specified model is used for execution.
+
+    Attributes:
+        model: Direct model ID to use (bypasses router classification).
+        temperature: Override agent's default temperature.
+        thinking_enabled: Enable extended reasoning (if model supports it).
+        enable_web_search: Toggle web search capability.
+    """
+    model: Optional[str] = None
+    temperature: Optional[float] = None
+    thinking_enabled: Optional[bool] = None
+    enable_web_search: Optional[bool] = None
+
+
+@dataclass
 class UserProfile:
     """User profile loaded from Obsidian and DynamoDB."""
     user_id: str
@@ -107,6 +127,9 @@ class ExecutionContext:
     # Request tracking (for Discord streaming state)
     request_id: Optional[str] = None
 
+    # User configuration overrides (from web-service)
+    user_config: Optional[UserConfig] = None
+
     # WebSocket for streaming and questions
     websocket: Optional["WebSocket"] = None
 
@@ -150,6 +173,10 @@ class ExecutionContext:
     # Collected sources from web_fetch (captured by SourceCaptureHook)
     # Only web_fetch URLs are captured - these are actually read sources
     collected_sources: List[Dict[str, str]] = field(default_factory=list)
+
+    # Generated images from generate_image tool (captured by ImageCaptureHook)
+    # List of dicts: {"file_id": str, "storage_key": str, "width": int, "height": int, ...}
+    generated_images: List[Dict[str, Any]] = field(default_factory=list)
 
     # Tool call tracking (incremented after successful calls only)
     tool_call_counts: Dict[str, int] = field(default_factory=dict)

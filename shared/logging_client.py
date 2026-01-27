@@ -5,6 +5,8 @@ import logging
 import logging.handlers
 import os
 
+from log_config import LogSettings
+
 
 def setup_logger(service_name: str) -> logging.Logger:
     """
@@ -49,6 +51,13 @@ def setup_logger(service_name: str) -> logging.Logger:
     root_logger.handlers = []  # Clear existing handlers
     root_logger.addHandler(socket_handler)
     root_logger.addHandler(console_handler)
+
+    # Silence noisy third-party loggers from config (OCP: extend via env var)
+    settings = LogSettings()
+    for logger_name in settings.NOISY_LOGGERS.split(","):
+        logger_name = logger_name.strip()
+        if logger_name:
+            logging.getLogger(logger_name).setLevel(logging.WARNING)
 
     # Also create the named service logger for direct use
     logger = logging.getLogger(service_name)

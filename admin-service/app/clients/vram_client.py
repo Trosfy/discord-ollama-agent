@@ -110,7 +110,7 @@ class VRAMClient:
                 ...
             ]
         """
-        url = f"{self.base_url}/internal/vram/available-models"
+        url = f"{self.base_url}/models"
 
         try:
             response = await self.client.get(url, headers=self._get_headers())

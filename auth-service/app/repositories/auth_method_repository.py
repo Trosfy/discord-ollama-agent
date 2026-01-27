@@ -3,6 +3,7 @@ import aioboto3
 import os
 from typing import Optional, List
 from datetime import datetime
+from contextlib import asynccontextmanager
 from app.interfaces.auth_method_repository import IAuthMethodRepository
 from app.domain.auth_method import AuthMethod
 
@@ -16,18 +17,20 @@ class DynamoDBAuthMethodRepository(IAuthMethodRepository):
         self.access_key = os.getenv('DYNAMODB_ACCESS_KEY', 'test')
         self.secret_key = os.getenv('DYNAMODB_SECRET_KEY', 'test')
         self.table_name = 'auth_methods'
+        self._session = aioboto3.Session()
 
+    @asynccontextmanager
     async def _get_table(self):
-        session = aioboto3.Session()
-        resource = session.resource(
+        """Get table within a context manager to properly manage the session lifecycle."""
+        async with self._session.resource(
             'dynamodb',
             endpoint_url=self.endpoint,
             region_name=self.region,
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key
-        )
-        async with resource as dynamodb:
-            return await dynamodb.Table(self.table_name)
+        ) as dynamodb:
+            table = await dynamodb.Table(self.table_name)
+            yield table
 
     def _item_to_auth_method(self, item: dict) -> AuthMethod:
         """Convert DynamoDB item to AuthMethod domain object"""
@@ -46,13 +49,13 @@ class DynamoDBAuthMethodRepository(IAuthMethodRepository):
 
     async def get_by_id(self, auth_method_id: str) -> Optional[AuthMethod]:
         """Get auth method by ID"""
-        table = await self._get_table()
-        response = await table.get_item(Key={'auth_method_id': auth_method_id})
+        async with self._get_table() as table:
+            response = await table.get_item(Key={'auth_method_id': auth_method_id})
 
-        if 'Item' not in response:
-            return None
+            if 'Item' not in response:
+                return None
 
-        return self._item_to_auth_method(response['Item'])
+            return self._item_to_auth_method(response['Item'])
 
     async def get_by_provider_and_identifier(
         self,
@@ -60,86 +63,82 @@ class DynamoDBAuthMethodRepository(IAuthMethodRepository):
         provider_user_id: str
     ) -> Optional[AuthMethod]:
         """Get auth method by provider + identifier using GSI"""
-        table = await self._get_table()
+        async with self._get_table() as table:
+            response = await table.query(
+                IndexName='provider-provider_user_id-index',
+                KeyConditionExpression='provider = :provider AND provider_user_id = :puid',
+                ExpressionAttributeValues={
+                    ':provider': provider,
+                    ':puid': provider_user_id
+                }
+            )
 
-        response = await table.query(
-            IndexName='provider-provider_user_id-index',
-            KeyConditionExpression='provider = :provider AND provider_user_id = :puid',
-            ExpressionAttributeValues={
-                ':provider': provider,
-                ':puid': provider_user_id
-            }
-        )
+            items = response.get('Items', [])
+            if not items:
+                return None
 
-        items = response.get('Items', [])
-        if not items:
-            return None
-
-        return self._item_to_auth_method(items[0])
+            return self._item_to_auth_method(items[0])
 
     async def get_all_for_user(self, user_id: str) -> List[AuthMethod]:
         """Get all auth methods for a user using GSI"""
-        table = await self._get_table()
+        async with self._get_table() as table:
+            response = await table.query(
+                IndexName='user_id-index',
+                KeyConditionExpression='user_id = :uid',
+                ExpressionAttributeValues={':uid': user_id}
+            )
 
-        response = await table.query(
-            IndexName='user_id-index',
-            KeyConditionExpression='user_id = :uid',
-            ExpressionAttributeValues={':uid': user_id}
-        )
-
-        items = response.get('Items', [])
-        return [self._item_to_auth_method(item) for item in items]
+            items = response.get('Items', [])
+            return [self._item_to_auth_method(item) for item in items]
 
     async def create(self, auth_method: AuthMethod) -> AuthMethod:
         """Create new auth method"""
-        table = await self._get_table()
+        async with self._get_table() as table:
+            item = {
+                'auth_method_id': auth_method.auth_method_id,
+                'user_id': auth_method.user_id,
+                'provider': auth_method.provider,
+                'provider_user_id': auth_method.provider_user_id,
+                'credentials': auth_method.credentials,
+                'metadata': auth_method.metadata,
+                'is_primary': auth_method.is_primary,
+                'is_verified': auth_method.is_verified,
+                'created_at': auth_method.created_at.isoformat()
+            }
 
-        item = {
-            'auth_method_id': auth_method.auth_method_id,
-            'user_id': auth_method.user_id,
-            'provider': auth_method.provider,
-            'provider_user_id': auth_method.provider_user_id,
-            'credentials': auth_method.credentials,
-            'metadata': auth_method.metadata,
-            'is_primary': auth_method.is_primary,
-            'is_verified': auth_method.is_verified,
-            'created_at': auth_method.created_at.isoformat()
-        }
+            if auth_method.last_used_at:
+                item['last_used_at'] = auth_method.last_used_at.isoformat()
 
-        if auth_method.last_used_at:
-            item['last_used_at'] = auth_method.last_used_at.isoformat()
-
-        await table.put_item(Item=item)
-        return auth_method
+            await table.put_item(Item=item)
+            return auth_method
 
     async def update(self, auth_method: AuthMethod) -> AuthMethod:
         """Update auth method"""
-        table = await self._get_table()
+        async with self._get_table() as table:
+            update_expr = 'SET credentials = :creds, metadata = :meta, '
+            update_expr += 'is_primary = :primary, is_verified = :verified'
 
-        update_expr = 'SET credentials = :creds, metadata = :meta, '
-        update_expr += 'is_primary = :primary, is_verified = :verified'
+            expr_values = {
+                ':creds': auth_method.credentials,
+                ':meta': auth_method.metadata,
+                ':primary': auth_method.is_primary,
+                ':verified': auth_method.is_verified
+            }
 
-        expr_values = {
-            ':creds': auth_method.credentials,
-            ':meta': auth_method.metadata,
-            ':primary': auth_method.is_primary,
-            ':verified': auth_method.is_verified
-        }
+            if auth_method.last_used_at:
+                update_expr += ', last_used_at = :last_used'
+                expr_values[':last_used'] = auth_method.last_used_at.isoformat()
 
-        if auth_method.last_used_at:
-            update_expr += ', last_used_at = :last_used'
-            expr_values[':last_used'] = auth_method.last_used_at.isoformat()
+            await table.update_item(
+                Key={'auth_method_id': auth_method.auth_method_id},
+                UpdateExpression=update_expr,
+                ExpressionAttributeValues=expr_values
+            )
 
-        await table.update_item(
-            Key={'auth_method_id': auth_method.auth_method_id},
-            UpdateExpression=update_expr,
-            ExpressionAttributeValues=expr_values
-        )
-
-        return auth_method
+            return auth_method
 
     async def delete(self, auth_method_id: str) -> bool:
         """Delete auth method"""
-        table = await self._get_table()
-        await table.delete_item(Key={'auth_method_id': auth_method_id})
-        return True
+        async with self._get_table() as table:
+            await table.delete_item(Key={'auth_method_id': auth_method_id})
+            return True

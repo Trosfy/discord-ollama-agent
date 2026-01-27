@@ -14,7 +14,8 @@ RUN useradd --system --uid 1000 --shell /bin/bash app \
 COPY pyproject.toml ./
 
 # Install dependencies with uv (need git for strands-agents from GitHub)
-RUN uv pip install --system --no-cache .
+# Include diffusion extra for FLUX 2.dev image generation
+RUN uv pip install --system --no-cache ".[diffusion]"
 
 # Copy application code
 COPY --chown=app:app app/ ./app/

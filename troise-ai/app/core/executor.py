@@ -17,6 +17,7 @@ from .interfaces.skill import ISkill, SkillResult
 from .interfaces.agent import IAgent, AgentResult
 from .interfaces.services import IVRAMOrchestrator
 from .interfaces.graph import IGraphRegistry, IGraphExecutor, GraphResult
+from .interfaces.output_strategy import IOutputStrategy
 from .registry import PluginRegistry
 from .router import RoutingResult
 from .tool_factory import ToolFactory
@@ -26,6 +27,7 @@ from ..prompts import PromptComposer
 
 if TYPE_CHECKING:
     from .graph import Graph
+    from ..strategies import DiscordOutputStrategy, TerminalOutputStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +77,25 @@ def get_action_instructions(action_type: str) -> str:
 
 @dataclass
 class ExecutionResult:
-    """Unified result from skill or agent execution."""
-    content: str
-    source_type: str  # "skill" or "agent"
+    """Unified result from skill, agent, or graph execution.
+
+    Supports both text content (code, responses) and binary content (images).
+    Designed for future FLUX/image generation integration.
+
+    Attributes:
+        content: Text or binary content from execution.
+        content_type: MIME type - "text/plain", "image/png", etc.
+        source_type: "skill", "agent", or "graph".
+        source_name: Name of the plugin that produced this result.
+        tool_calls: List of tool calls made during execution.
+        metadata: Additional metadata (tokens, timing, etc.).
+        success: Whether execution succeeded.
+        error: Error message if execution failed.
+    """
+    content: Union[str, bytes]
+    source_type: str  # "skill", "agent", or "graph"
     source_name: str
+    content_type: str = "text/plain"  # MIME type
     tool_calls: List[Dict[str, Any]] = None
     metadata: Dict[str, Any] = None
     success: bool = True
@@ -89,6 +106,16 @@ class ExecutionResult:
             self.tool_calls = []
         if self.metadata is None:
             self.metadata = {}
+
+    @property
+    def is_binary(self) -> bool:
+        """Check if content is binary (e.g., image)."""
+        return isinstance(self.content, bytes)
+
+    @property
+    def is_image(self) -> bool:
+        """Check if content is an image."""
+        return self.content_type.startswith("image/")
 
 
 class Executor:
@@ -131,6 +158,42 @@ class Executor:
         self._tool_factory = tool_factory
         self._graph_registry = graph_registry
         self._graph_executor = graph_executor
+        # Cache resolved strategies
+        self._strategy_cache: Dict[str, IOutputStrategy] = {}
+
+    def _get_output_strategy(self, context: ExecutionContext) -> IOutputStrategy:
+        """Get interface-specific output strategy.
+
+        Resolves the appropriate strategy based on context.interface.
+        Strategies are cached for efficiency.
+
+        Args:
+            context: Execution context with interface info.
+
+        Returns:
+            Output strategy for the interface.
+        """
+        interface = getattr(context, "interface", "discord")
+
+        # Check cache first
+        if interface in self._strategy_cache:
+            return self._strategy_cache[interface]
+
+        # Resolve strategy from container based on interface
+        # Import here to avoid circular imports at module level
+        from ..strategies import DiscordOutputStrategy, TerminalOutputStrategy
+
+        if interface in ("discord", "web"):
+            strategy = self._container.resolve(DiscordOutputStrategy)
+        elif interface in ("cli", "terminal", "tui"):
+            strategy = self._container.resolve(TerminalOutputStrategy)
+        else:
+            # Default to Discord strategy for unknown interfaces
+            logger.warning(f"Unknown interface '{interface}', using Discord strategy")
+            strategy = self._container.resolve(DiscordOutputStrategy)
+
+        self._strategy_cache[interface] = strategy
+        return strategy
 
     async def execute(
         self,
@@ -191,25 +254,39 @@ class Executor:
         context: ExecutionContext,
     ) -> str:
         """
-        Build enhanced prompt with action-specific formatting instructions.
+        Build enhanced prompt with interface-specific preparation and formatting.
 
-        Appends formatting instructions based on context.action_type so that
-        postprocessing can reliably extract artifacts from the response.
+        1. Uses IOutputStrategy.prepare_prompt() for interface-specific handling:
+           - Discord: Returns clean_intent (removes "give me the file" language)
+           - Terminal: Returns raw prompt (agent can handle file creation)
+
+        2. Appends formatting instructions based on context.action_type so that
+           postprocessing can reliably extract artifacts from the response.
 
         Args:
             user_input: Original user input (already enriched with file context).
-            context: Execution context with action_type.
+            context: Execution context with action_type and interface.
 
         Returns:
             Enhanced prompt with formatting instructions appended.
         """
+        # Get interface-specific strategy
+        strategy = self._get_output_strategy(context)
+
+        # Prepare prompt (Discord sanitizes, Terminal passes through)
+        prepared_prompt = strategy.prepare_prompt(user_input, context)
+
+        # Add action-specific formatting instructions
         action_type = getattr(context, "action_type", "query")
         formatting_instructions = get_action_instructions(action_type)
 
         # Append formatting instructions to help postprocessing extract artifacts
-        enhanced = f"{user_input}\n\n{formatting_instructions}"
+        enhanced = f"{prepared_prompt}\n\n{formatting_instructions}"
 
-        logger.debug(f"Enhanced prompt with '{action_type}' formatting instructions")
+        logger.debug(
+            f"Enhanced prompt: interface={context.interface}, "
+            f"action_type={action_type}, len={len(enhanced)}"
+        )
         return enhanced
 
     async def _execute_skill(
@@ -284,7 +361,15 @@ class Executor:
         # Create tools for agent
         tools = self._tool_factory.create_tools_for_agent(agent_name, context)
 
-        # Create agent instance with tools
+        # Filter tools using interface-specific strategy
+        # Discord: Excludes write_file (prevents tool confusion with small models)
+        # Terminal: Includes write_file (agent can write files directly)
+        strategy = self._get_output_strategy(context)
+        tool_names = [t.get("name", "") for t in tools]
+        filtered_names = strategy.get_tools(agent_name, tool_names, context)
+        tools = [t for t in tools if t.get("name", "") in filtered_names]
+
+        # Create agent instance with filtered tools
         agent = self._create_agent_instance(plugin, context, tools)
 
         # Enhance prompt with action-specific formatting instructions
@@ -306,7 +391,8 @@ class Executor:
         # Execute agent with streaming support
         logger.info(
             f"Executing agent: {agent_name} with {len(tools)} tools "
-            f"(action_type={context.action_type}, streaming={stream_handler is not None})"
+            f"(interface={context.interface}, action_type={context.action_type}, "
+            f"streaming={stream_handler is not None})"
         )
         logger.debug(f"Agent prompt size: {len(enhanced_input)} chars")
         start_time = time.time()
@@ -315,6 +401,7 @@ class Executor:
             result = await agent.execute(enhanced_input, context, stream_handler=stream_handler)
 
             duration_ms = (time.time() - start_time) * 1000
+            duration_sec = duration_ms / 1000
             tool_count = len(result.tool_calls) if result.tool_calls else 0
             logger.info(f"Agent complete: {agent_name}, tool_calls={tool_count}, duration={duration_ms:.0f}ms")
 
@@ -324,12 +411,15 @@ class Executor:
             )
             streaming_manager.record_success(used_streaming)
 
+            # Merge duration into metadata for WebSocket completion message
+            metadata = {**(result.metadata or {}), "generation_time": duration_sec}
+
             return ExecutionResult(
                 content=result.content,
                 source_type="agent",
                 source_name=agent_name,
                 tool_calls=result.tool_calls,
-                metadata=result.metadata,
+                metadata=metadata,
                 success=True,
             )
 
@@ -416,6 +506,7 @@ class Executor:
             )
 
             duration_ms = (time.time() - start_time) * 1000
+            duration_sec = duration_ms / 1000
             total_tool_calls = len(graph_result.total_tool_calls)
             nodes_executed = len(graph_result.node_results)
             logger.info(
@@ -429,7 +520,7 @@ class Executor:
             )
             streaming_manager.record_success(used_streaming)
 
-            return self._build_graph_result(graph_result)
+            return self._build_graph_result(graph_result, duration_sec)
 
         except Exception as e:
             # Record streaming failure if we were streaming
@@ -441,16 +532,31 @@ class Executor:
             # Cleanup tools AFTER entire graph completes
             await self._tool_factory.cleanup()
 
-    def _build_graph_result(self, graph_result: GraphResult) -> ExecutionResult:
+    def _build_graph_result(self, graph_result: GraphResult, duration_sec: float) -> ExecutionResult:
         """
         Convert GraphResult to ExecutionResult for API compatibility.
 
         Args:
             graph_result: Result from graph execution.
+            duration_sec: Total graph execution duration in seconds.
 
         Returns:
             ExecutionResult compatible with existing API.
         """
+        # Extract token metrics from final node's state updates
+        last_node = graph_result.node_results[-1] if graph_result.node_results else None
+        last_node_name = last_node.node_name if last_node else None
+
+        token_metrics = {}
+        if last_node_name:
+            final_state = graph_result.final_state
+            token_metrics = {
+                "input_tokens": final_state.get(f"{last_node_name}_input_tokens"),
+                "output_tokens": final_state.get(f"{last_node_name}_output_tokens"),
+                "total_tokens": final_state.get(f"{last_node_name}_total_tokens"),
+                "model": final_state.get(f"{last_node_name}_model"),
+            }
+
         return ExecutionResult(
             content=graph_result.final_content,
             source_type="graph",
@@ -461,6 +567,8 @@ class Executor:
                 "domain": graph_result.domain,
                 "nodes_executed": graph_result.nodes_executed,
                 "success": graph_result.success,
+                "generation_time": duration_sec,
+                **token_metrics,
             },
             success=graph_result.success,
         )

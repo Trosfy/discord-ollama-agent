@@ -69,6 +69,33 @@ Only extract actual file content (code, configs, data), not conversational text.
         self._orchestrator = vram_orchestrator
         self._sanitizer = sanitizer or ContentSanitizer()
 
+    def _extract_json(self, text: str) -> Optional[dict]:
+        """Extract first valid JSON object from text.
+
+        Uses json.JSONDecoder.raw_decode() to properly handle
+        nested braces in content values (e.g., C++ initializer lists,
+        Python sets).
+
+        Args:
+            text: Text containing JSON somewhere within it.
+
+        Returns:
+            Parsed JSON dict or None if not found.
+        """
+        decoder = json.JSONDecoder()
+
+        # Find potential JSON start positions
+        for i, char in enumerate(text):
+            if char == '{':
+                try:
+                    obj, end = decoder.raw_decode(text, i)
+                    if isinstance(obj, dict):
+                        return obj
+                except json.JSONDecodeError:
+                    continue
+
+        return None
+
     def can_handle(self, result: "ExecutionResult") -> bool:
         """Check if result has content to extract from.
 
@@ -117,13 +144,11 @@ Return JSON only."""
             response = await loop.run_in_executor(None, agent, user_message)
             response_str = str(response).strip()
 
-            # Try to extract JSON
-            json_match = re.search(r'\{[^{}]*\}', response_str, re.DOTALL)
-            if not json_match:
+            # Try to extract JSON using proper parser
+            data = self._extract_json(response_str)
+            if data is None:
                 logger.debug("No JSON found in extraction response")
                 return []
-
-            data = json.loads(json_match.group())
 
             if data.get("found") is False:
                 return []

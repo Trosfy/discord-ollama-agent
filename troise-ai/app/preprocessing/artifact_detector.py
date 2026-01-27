@@ -38,10 +38,9 @@ class OutputArtifactDetector:
     MAX_FAILURES = 3
     SKIP_DURATION = 60  # seconds
 
-    DETECTION_PROMPT = """Reasoning: low
+    DETECTION_PROMPT = """Reasoning: none
 
-You are a binary classifier. Does this request ask for a file to be created or generated?
-Answer only YES or NO, nothing else."""
+Does this request ask for a file to be created? Answer only YES or NO."""
 
     def __init__(
         self,
@@ -79,17 +78,17 @@ Answer only YES or NO, nothing else."""
             model = await self._orchestrator.get_model(
                 model_id=router_model_id,
                 temperature=0.1,
-                max_tokens=100,  # Room for thinking + YES/NO
+                max_tokens=2000,  # Room for thinking tokens + YES/NO
             )
 
-            # Create Strands Agent for classification
+            # Create minimal Strands Agent for classification (same pattern as Router)
             agent = Agent(
                 model=model,
-                tools=[],  # No tools - pure classification
+                tools=[],  # No tools - pure YES/NO classification
                 system_prompt=self.DETECTION_PROMPT,
             )
 
-            # Run agent synchronously (Strands Agent is sync)
+            # Run agent synchronously in executor (Strands Agent is sync)
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(None, agent, message)
             response_str = str(response).strip()
@@ -128,7 +127,29 @@ Answer only YES or NO, nothing else."""
 
         # Strong indicators of file output request
         create_words = ["create", "write", "generate", "make", "build"]
-        file_words = ["file", "script", "dockerfile", "config", "code", ".py", ".js", ".ts"]
+        file_words = [
+            "file", "script", "dockerfile", "config", "code",
+            # Web/JS ecosystem
+            ".py", ".js", ".ts", ".jsx", ".tsx", ".vue", ".svelte",
+            # Systems programming
+            ".cpp", ".c", ".h", ".hpp", ".cc", ".cxx",
+            # JVM
+            ".java", ".kt", ".scala", ".groovy",
+            # Other compiled
+            ".go", ".rs", ".swift", ".m",
+            # Scripting
+            ".rb", ".php", ".pl", ".lua",
+            # Shell
+            ".sh", ".bash", ".zsh", ".ps1",
+            # Config/Data
+            ".yaml", ".yml", ".json", ".xml", ".toml", ".ini",
+            # Web
+            ".html", ".css", ".scss", ".sass", ".less",
+            # Database
+            ".sql",
+            # Documentation
+            ".md", ".txt", ".rst",
+        ]
 
         has_create = any(word in lower_msg for word in create_words)
         has_file = any(word in lower_msg for word in file_words)

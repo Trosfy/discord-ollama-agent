@@ -10,8 +10,12 @@ export interface Message {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
-  timestamp: Date;
+  timestamp: Date | string;  // Date in memory, string when serialized
   tokensUsed?: number;
+  outputTokens?: number;  // Output tokens (excluding thinking)
+  totalTokensGenerated?: number;  // Total tokens including thinking (for TPS)
+  generationTime?: number;  // Seconds taken to generate
+  model?: string;  // Model used to generate this message
   attachments?: MessageAttachment[];
 }
 
@@ -34,6 +38,7 @@ export interface Conversation {
   updatedAt: Date;
   model?: string;
   archived: boolean;
+  pinned?: boolean;  // Pin conversation to top of list
 }
 
 export type ConversationSummary = Pick<Conversation, "id" | "title" | "createdAt" | "updatedAt"> & {

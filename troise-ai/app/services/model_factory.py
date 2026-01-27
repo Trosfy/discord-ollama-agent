@@ -11,10 +11,8 @@ Example:
 import logging
 from typing import Any, Dict, Optional, Union
 
-from strands.models.ollama import OllamaModel
-from strands.models.openai import OpenAIModel
-
 from app.core.config import Config, ModelCapabilities
+from app.core.models import ExtendedOllamaModel, ExtendedOpenAIModel
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +61,7 @@ class ModelFactory:
         max_tokens: int = 4096,
         additional_args: Optional[Dict[str, Any]] = None,
         keep_alive: str = "10m",
-    ) -> Union[OllamaModel, OpenAIModel]:
+    ) -> Union[ExtendedOllamaModel, ExtendedOpenAIModel]:
         """
         Create appropriate Strands model based on backend type.
 
@@ -77,7 +75,7 @@ class ModelFactory:
             keep_alive: How long to keep model loaded (Ollama only).
 
         Returns:
-            OllamaModel or OpenAIModel instance.
+            ExtendedOllamaModel or ExtendedOpenAIModel instance.
 
         Raises:
             ValueError: If model is not in profile or backend unsupported.
@@ -123,9 +121,12 @@ class ModelFactory:
         max_tokens: int,
         additional_args: Optional[Dict[str, Any]],
         keep_alive: str,
-    ) -> OllamaModel:
+    ) -> ExtendedOllamaModel:
         """
-        Create OllamaModel for Ollama backend.
+        Create ExtendedOllamaModel for Ollama backend.
+
+        Uses ExtendedOllamaModel to fix the token count swap bug in
+        Strands SDK (input/output tokens were reversed).
 
         Args:
             model_id: Model identifier.
@@ -136,14 +137,14 @@ class ModelFactory:
             keep_alive: How long to keep model loaded.
 
         Returns:
-            Configured OllamaModel instance.
+            Configured ExtendedOllamaModel instance.
         """
         logger.info(
-            f"Creating OllamaModel: {model_id} @ {host}, "
+            f"Creating ExtendedOllamaModel: {model_id} @ {host}, "
             f"additional_args={additional_args}, keep_alive={keep_alive}"
         )
 
-        return OllamaModel(
+        return ExtendedOllamaModel(
             host=host,
             model_id=model_id,
             temperature=temperature,
@@ -159,9 +160,12 @@ class ModelFactory:
         temperature: float,
         max_tokens: int,
         additional_args: Optional[Dict[str, Any]],
-    ) -> OpenAIModel:
+    ) -> ExtendedOpenAIModel:
         """
-        Create OpenAIModel for SGLang/vLLM backends.
+        Create ExtendedOpenAIModel for SGLang/vLLM backends.
+
+        Uses ExtendedOpenAIModel to extract reasoning_tokens from
+        completion_tokens_details when available.
 
         Args:
             model_id: Model identifier.
@@ -171,10 +175,10 @@ class ModelFactory:
             additional_args: Additional params to merge.
 
         Returns:
-            Configured OpenAIModel instance.
+            Configured ExtendedOpenAIModel instance.
         """
         logger.info(
-            f"Creating OpenAIModel: {model_id} @ {host}/v1, "
+            f"Creating ExtendedOpenAIModel: {model_id} @ {host}/v1, "
             f"additional_args={additional_args}"
         )
 
@@ -188,7 +192,7 @@ class ModelFactory:
         if additional_args:
             params.update(additional_args)
 
-        return OpenAIModel(
+        return ExtendedOpenAIModel(
             client_args={
                 "base_url": f"{host.rstrip('/')}/v1",
                 "api_key": "dummy",  # Required but not used for local backends

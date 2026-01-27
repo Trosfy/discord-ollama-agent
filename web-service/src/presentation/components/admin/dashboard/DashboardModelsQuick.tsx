@@ -57,7 +57,7 @@ export function DashboardModelsQuick() {
             name: m.name,
             backend: m.backend?.type || "ollama",
             is_loaded: m.is_loaded || false,
-            can_toggle: m.backend?.type === "ollama", // Only Ollama models can be toggled
+            can_toggle: m.api_managed ?? true, // SSOT from troise-ai
             size_gb: m.vram_size_gb,
           }));
           setModels(transformedModels);
@@ -86,10 +86,10 @@ export function DashboardModelsQuick() {
   const handleModelToggle = async (
     modelName: string,
     shouldLoad: boolean,
-    backend: string
+    canToggle: boolean
   ) => {
-    // SGLang models cannot be toggled
-    if (backend === "sglang") {
+    // Only api_managed models can be toggled
+    if (!canToggle) {
       return;
     }
 
@@ -218,7 +218,7 @@ export function DashboardModelsQuick() {
                         handleModelToggle(
                           model.name,
                           parseInt(e.target.value) === 1,
-                          model.backend
+                          model.can_toggle
                         )
                       }
                       className={`w-10 h-2 bg-secondary rounded-lg appearance-none transition-colors shrink-0 ${
@@ -390,7 +390,7 @@ export function DashboardModelsQuick() {
                               handleModelToggle(
                                 model.name,
                                 parseInt(e.target.value) === 1,
-                                model.backend
+                                model.can_toggle
                               )
                             }
                             className={`w-10 h-2 bg-secondary rounded-lg appearance-none transition-colors ${

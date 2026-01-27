@@ -74,10 +74,32 @@ services:
       - MINIO_BUCKET=troise-files
       # SearXNG for web search
       - SEARXNG_HOST=http://troise-searxng:8080
+      # WebSocket Authentication
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - BOT_SECRET=${BOT_SECRET:-}
+      - DISABLE_WS_AUTH=${DISABLE_WS_AUTH:-false}
+      # HuggingFace cache location inside container
+      - HF_HOME=/home/app/.cache/huggingface
+      # ComfyUI for NVFP4 image generation
+      - COMFYUI_HOST=http://troise-comfyui:8188
     volumes:
       - ./troise-ai:/app
       - ./shared:/shared
       - ./troise-ai/config:/app/config
+      # Mount HuggingFace cache for FLUX model
+      - /home/trosfy/.cache/huggingface:/home/app/.cache/huggingface
+    # GPU access for FLUX image generation
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Wait for ComfyUI to be healthy before starting warmup
+    depends_on:
+      comfyui:
+        condition: service_healthy
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -102,6 +124,13 @@ services:
       - LOGGING_HOST=trollama-logging
       - LOGGING_PORT=9999
       - PYTHONPATH=/shared
+      # WebSocket Authentication (HMAC signature)
+      - BOT_SECRET=${BOT_SECRET:-}
+      # MinIO (for fetching generated images)
+      - MINIO_ENDPOINT=troise-minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - MINIO_BUCKET=troise-files
     ports:
       - "9997:9998"  # Health check port (external:internal)
     volumes:
@@ -201,10 +230,56 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ComfyUI - Node-based GenAI with native NVFP4 support for FLUX image generation
+  # Custom ARM64 build for DGX Spark (Blackwell)
+  comfyui:
+    build:
+      context: ./comfyui
+      dockerfile: Dockerfile
+    image: troise-comfyui:arm64
+    container_name: troise-comfyui
+    restart: unless-stopped
+    ports:
+      - "8188:8188"  # ComfyUI web UI and API
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HF_HOME=/root/.cache/huggingface
+    volumes:
+      # Mount HuggingFace cache
+      - /home/trosfy/.cache/huggingface:/root/.cache/huggingface
+      # Mount output directory for generated images
+      - comfyui_output:/opt/ComfyUI/output
+      # Mount FLUX2 NVFP4 diffusion model
+      - /home/trosfy/.cache/huggingface/hub/models--black-forest-labs--FLUX.2-dev-NVFP4/snapshots/142b87e70bc3006937b7093d89ff287b5f59f071/flux2-dev-nvfp4.safetensors:/opt/ComfyUI/models/diffusion_models/flux2-dev-nvfp4.safetensors:ro
+      # Mount FLUX2 text encoder (FP4 mixed)
+      - /home/trosfy/.cache/huggingface/comfyui-flux2/mistral_3_small_flux2_fp4_mixed.safetensors:/opt/ComfyUI/models/text_encoders/mistral_3_small_flux2_fp4_mixed.safetensors:ro
+      # Mount FLUX2 VAE
+      - /home/trosfy/.cache/huggingface/comfyui-flux2/flux2-vae.safetensors:/opt/ComfyUI/models/vae/flux2-vae.safetensors:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8188/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   temp-files:
     driver: local
   minio_data:
+    driver: local
+  comfyui_output:
     driver: local
 
 networks:

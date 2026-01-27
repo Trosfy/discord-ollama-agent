@@ -40,9 +40,18 @@ export const API_CONFIG = {
         `${API_BASE_URL}/api/chat/conversation/${conversationId}/message/${messageId}/regenerate`,
     },
 
-    // WebSocket
+    // WebSocket (TROISE-AI compatible)
     WS: {
-      CHAT: (conversationId: string) => `${WS_BASE_URL}/ws/chat/${conversationId}`,
+      CHAT: (sessionId: string, userId: string, token?: string) => {
+        const base = `${WS_BASE_URL}/ws/chat?session_id=${sessionId}&user_id=${userId}&interface=web`;
+        return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+      },
+    },
+
+    // File uploads (TROISE-AI compatible)
+    FILES: {
+      UPLOAD: `${API_BASE_URL}/files/upload`,
+      MODELS: `${API_BASE_URL}/models`,  // Get available models for dropdown
     },
 
     // SSE

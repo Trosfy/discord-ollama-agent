@@ -29,15 +29,17 @@ nodes:
 
   agentic_code:
     agent: agentic_code
-    tools: [brain_search, read_file, run_code, ask_user]
+    tools: []  # No tools - pure code generation
 
   code_reviewer:
     agent: code_reviewer
-    tools: [read_file]
+    tools: []  # No filesystem access - reviews code passed in context
+    streaming: false  # Internal node - don't stream VERDICT to user
 
   debugger:
     agent: debugger
-    tools: [read_file, run_code]
+    tools: []  # No filesystem access - debugs code passed in context
+    streaming: false  # Internal node - don't stream debug output to user
 
   test_generator:
     agent: test_generator

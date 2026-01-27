@@ -148,3 +148,22 @@ class BaseMessageBuilder:
             },
             context,
         )
+
+    def build_completion_metrics(
+        self,
+        metadata: Dict[str, Any],
+        context: "ExecutionContext",
+    ) -> Optional[Dict[str, Any]]:
+        """Build completion metrics message for interfaces that display them.
+
+        Override in subclasses to provide interface-specific metrics.
+        Returns None by default (most interfaces don't display metrics).
+
+        Args:
+            metadata: Execution result metadata with token counts, timing, etc.
+            context: Execution context.
+
+        Returns:
+            Metrics message or None to skip.
+        """
+        return None

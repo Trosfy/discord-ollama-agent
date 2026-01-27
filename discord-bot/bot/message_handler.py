@@ -11,6 +11,7 @@ import time
 from bot.websocket_manager import WebSocketManager
 from bot.utils import split_message, validate_attachment, encode_file_base64, find_stream_split_point
 from bot.animation_manager import AnimationManager
+from bot.minio_client import MinIOClient
 import logging_client
 
 # Initialize logger
@@ -79,6 +80,7 @@ class MessageHandler:
         self.ws_manager = ws_manager
         self.rate_limiter = global_rate_limiter  # Shared rate limiter
         self.animation_manager = AnimationManager(rate_limiter=global_rate_limiter)  # Share rate limiter
+        self.minio_client = MinIOClient()  # For fetching generated images
 
     async def handle_user_message(self, message: discord.Message):
         """
@@ -880,7 +882,11 @@ class MessageHandler:
 
     async def _handle_file_artifact(self, data: dict, is_suggestion: bool = False):
         """
-        Handle artifact with base64_data from TROISE AI.
+        Handle file artifact from TROISE AI.
+
+        Supports two formats:
+        1. storage_key: Fetch file from MinIO (generated images)
+        2. base64_data: Legacy inline data (small files)
 
         Args:
             data: Message data containing file info
@@ -891,8 +897,8 @@ class MessageHandler:
         channel_id = data.get('channel_id')
 
         filename = file_info.get('filename')
-        base64_data = file_info.get('base64_data')
-        mimetype = file_info.get('mimetype', 'application/octet-stream')
+        storage_key = file_info.get('storage_key')  # New: reference to MinIO
+        base64_data = file_info.get('base64_data')  # Legacy: inline data
 
         if not channel_id:
             logger.warning("File artifact missing channel_id")
@@ -900,8 +906,8 @@ class MessageHandler:
 
         channel_id = int(channel_id)
 
-        if not filename or not base64_data:
-            logger.warning(f"File artifact missing required fields: filename={filename}, has_data={bool(base64_data)}")
+        if not filename:
+            logger.warning("File artifact missing filename")
             return
 
         # Get thread
@@ -911,8 +917,31 @@ class MessageHandler:
             return
 
         try:
-            # Decode base64 data
-            file_bytes = base64.b64decode(base64_data)
+            file_bytes = None
+
+            # Try storage_key first (new format for generated images)
+            if storage_key:
+                logger.info(f"[DISCORD] Fetching file from MinIO: {storage_key}")
+                # Run synchronous MinIO download in executor
+                loop = asyncio.get_event_loop()
+                file_bytes = await loop.run_in_executor(
+                    None, self.minio_client.download, storage_key
+                )
+                if file_bytes:
+                    logger.info(f"[DISCORD] Fetched {len(file_bytes)} bytes from MinIO")
+                else:
+                    logger.error(f"[DISCORD] Failed to fetch {storage_key} from MinIO")
+                    await thread.send(f"❌ Failed to fetch `{filename}` from storage")
+                    return
+
+            # Fallback to base64_data (legacy format)
+            elif base64_data:
+                file_bytes = base64.b64decode(base64_data)
+                logger.info(f"[DISCORD] Decoded {len(file_bytes)} bytes from base64")
+
+            else:
+                logger.warning(f"File artifact missing both storage_key and base64_data: {filename}")
+                return
 
             # Create Discord file object
             discord_file = discord.File(
@@ -927,11 +956,10 @@ class MessageHandler:
                 label = f"📎 **{filename}**"
 
             await thread.send(label, file=discord_file)
-
-            logger.info(f"Uploaded artifact: {filename} ({len(file_bytes)} bytes)")
+            logger.info(f"[DISCORD] Sent file: {filename} ({len(file_bytes)} bytes)")
 
         except Exception as e:
-            logger.error(f"Failed to upload artifact {filename}: {e}")
+            logger.error(f"[DISCORD] Failed to upload artifact {filename}: {e}")
             await thread.send(f"❌ Failed to upload artifact `{filename}`: {str(e)}")
 
     # =========================================================================

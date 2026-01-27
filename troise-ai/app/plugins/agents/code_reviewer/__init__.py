@@ -8,7 +8,7 @@ PLUGIN = {
     "class": CodeReviewerAgent,
     "description": "Reviews code for bugs, security issues, and style violations",
     "category": "code",
-    "tools": ["brain_search", "read_file"],
+    "tools": ["brain_search"],  # Reviews code passed in context - no filesystem access
     "config": {
         "temperature": 0.1,  # Deterministic review
         "max_tokens": 4096,

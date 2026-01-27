@@ -35,8 +35,8 @@ class CodeReviewerAgent(BaseAgent):
 
     name = "code_reviewer"
     category = "code"
-    # Uses brain_search for patterns, read_file for context
-    tools = ["brain_search", "read_file"]
+    # Uses brain_search for patterns
+    tools = ["brain_search"]
 
     def __init__(
         self,

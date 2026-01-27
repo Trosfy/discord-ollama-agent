@@ -3,32 +3,43 @@
  *
  * Infrastructure service for uploading files to the backend.
  * Follows SOLID principles - Single Responsibility for file uploads.
+ *
+ * Adapted for TROISE-AI compatibility:
+ * - Endpoint: /files/upload
+ * - Form field: session_id (instead of user_id)
+ * - Response: files[] with mimetype (instead of file_refs[] with content_type)
  */
 
 import { httpClient } from "./HttpClient";
+import { API_CONFIG } from "@/config/api.config";
 import { FileAttachment } from "@/domain/types/attachment.types";
 import { ChatFileRef } from "@/infrastructure/websocket/ChatWebSocket";
 
 /**
- * Response from backend for a single uploaded file
+ * Response from TROISE-AI backend for a single uploaded file
  */
 export interface FileUploadResponse {
   file_id: string;
   filename: string;
-  content_type: string;
+  mimetype: string;  // TROISE-AI uses mimetype instead of content_type
   size: number;
   extracted_content?: string;
-  url: string;
-  status: "success" | "error";
-  error?: string;
 }
 
 /**
- * Response from backend for multi-file upload
+ * Response from TROISE-AI backend for multi-file upload
  */
-export interface MultiFileUploadResponse {
-  success: boolean;
-  file_refs: FileUploadResponse[];
+export interface TroiseFileUploadResponse {
+  session_id: string;
+  files: FileUploadResponse[];
+  count: number;
+}
+
+/**
+ * Error response structure
+ */
+export interface UploadErrorResponse {
+  files: FileUploadResponse[];
   errors: Array<{
     filename: string;
     error: string;
@@ -40,13 +51,13 @@ export interface MultiFileUploadResponse {
  */
 export interface UploadOptions {
   onProgress?: (progress: number) => void;
+  sessionId?: string;  // Session ID for TROISE-AI
 }
 
 /**
  * File Upload Service
  */
 export class FileUploadService {
-  private static readonly UPLOAD_ENDPOINT = "/api/files/upload";
   private static readonly MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
   /**
@@ -57,23 +68,15 @@ export class FileUploadService {
     options?: UploadOptions
   ): Promise<FileUploadResponse> {
     const result = await this.uploadFiles([attachment], options);
-    
-    if (result.file_refs.length > 0) {
-      return result.file_refs[0];
+
+    if (result.files.length > 0) {
+      return result.files[0];
     }
-    
+
     if (result.errors.length > 0) {
-      return {
-        file_id: "",
-        filename: attachment.name,
-        content_type: attachment.mimeType,
-        size: attachment.size,
-        url: "",
-        status: "error",
-        error: result.errors[0].error,
-      };
+      throw new Error(result.errors[0].error);
     }
-    
+
     throw new Error("Unknown upload error");
   }
 
@@ -83,7 +86,7 @@ export class FileUploadService {
   static async uploadFiles(
     attachments: FileAttachment[],
     options?: UploadOptions
-  ): Promise<MultiFileUploadResponse> {
+  ): Promise<UploadErrorResponse> {
     // Validate files before upload
     for (const attachment of attachments) {
       if (attachment.size > this.MAX_FILE_SIZE) {
@@ -98,13 +101,13 @@ export class FileUploadService {
     for (const attachment of attachments) {
       formData.append("files", attachment.file);
     }
-    
-    // Add user ID (could be enhanced to use actual user ID from auth)
-    formData.append("user_id", "webui_user");
+
+    // Add session ID (TROISE-AI expects session_id, not user_id)
+    formData.append("session_id", options?.sessionId || "webui_session");
 
     try {
-      const response = await httpClient.post<MultiFileUploadResponse>(
-        this.UPLOAD_ENDPOINT,
+      const response = await httpClient.post<TroiseFileUploadResponse>(
+        API_CONFIG.ENDPOINTS.FILES.UPLOAD,
         formData,
         {
           headers: {
@@ -122,14 +125,17 @@ export class FileUploadService {
         }
       );
 
-      return response.data;
+      // Transform TROISE-AI response to our format
+      return {
+        files: response.data.files,
+        errors: [],
+      };
     } catch (error) {
       console.error("File upload failed:", error);
-      
+
       // Return error response
       return {
-        success: false,
-        file_refs: [],
+        files: [],
         errors: attachments.map((a) => ({
           filename: a.name,
           error: error instanceof Error ? error.message : "Upload failed",
@@ -143,7 +149,7 @@ export class FileUploadService {
    */
   static async deleteFile(fileId: string): Promise<boolean> {
     try {
-      await httpClient.delete(`/api/files/${fileId}`);
+      await httpClient.delete(`/files/${fileId}`);
       return true;
     } catch (error) {
       console.error("File deletion failed:", error);
@@ -159,12 +165,10 @@ export type { ChatFileRef } from "@/infrastructure/websocket/ChatWebSocket";
  * Convert upload responses to chat file references
  */
 export function toChatFileRefs(responses: FileUploadResponse[]): ChatFileRef[] {
-  return responses
-    .filter((r) => r.status === "success")
-    .map((r) => ({
-      file_id: r.file_id,
-      filename: r.filename,
-      content_type: r.content_type,
-      extracted_content: r.extracted_content,
-    }));
+  return responses.map((r) => ({
+    file_id: r.file_id,
+    filename: r.filename,
+    mimetype: r.mimetype,
+    extracted_content: r.extracted_content,
+  }));
 }

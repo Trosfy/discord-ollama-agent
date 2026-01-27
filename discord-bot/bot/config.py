@@ -14,6 +14,13 @@ class BotSettings(BaseSettings):
     BOT_SECRET: str = ""  # For signing Discord admin tokens
     ADMIN_ROLE_IDS: str = ""  # Comma-separated Discord role IDs that have admin access
 
+    # MinIO Settings (for fetching generated images)
+    MINIO_ENDPOINT: str = "minio:9000"
+    MINIO_ACCESS_KEY: str = ""
+    MINIO_SECRET_KEY: str = ""
+    MINIO_BUCKET: str = "troise-files"
+    MINIO_SECURE: bool = False
+
     # File Upload Settings
     MAX_FILE_SIZE_MB: int = 10  # Maximum upload size in MB
     ALLOWED_FILE_TYPES: List[str] = [

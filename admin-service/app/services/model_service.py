@@ -43,12 +43,12 @@ class ModelService:
         List all available models from profile configuration.
 
         Returns:
-            list: Available models with metadata
+            list: Available models with metadata (pass-through from troise-ai)
         """
         try:
             models = await self.vram_client.list_available_models()
             logger.debug(f"Retrieved {len(models)} available models")
-            return models
+            return models  # Pass through as-is
 
         except Exception as e:
             logger.error(f"Failed to list available models: {e}")

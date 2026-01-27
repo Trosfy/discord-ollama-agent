@@ -1,5 +1,5 @@
 """Service interfaces for dependency inversion."""
-from typing import TYPE_CHECKING, Protocol, List, Dict, Any, Optional
+from typing import TYPE_CHECKING, Protocol, List, Dict, Any, Optional, Tuple
 
 if TYPE_CHECKING:
     from ..context import ExecutionContext
@@ -181,6 +181,135 @@ class IVRAMOrchestrator(Protocol):
         Returns:
             Model ID from the profile for the specified role.
         """
+        ...
+
+    def get_model_capabilities(self, model_id: str) -> Optional[Any]:
+        """Get capabilities for a model if it exists in the current profile.
+
+        Used for validation when user specifies a model via user_config.
+        Returns ModelCapabilities if found, None otherwise.
+
+        Args:
+            model_id: The model identifier to look up.
+
+        Returns:
+            ModelCapabilities if found, None otherwise.
+        """
+        ...
+
+    async def list_available_models(self) -> List[Dict[str, Any]]:
+        """List all models available in the current profile with their capabilities.
+
+        Used by /models endpoint for web-service dropdown population.
+
+        Returns:
+            List of model info dicts including name, capabilities, and settings.
+        """
+        ...
+
+    async def get_diffusion_pipeline(self, model_id: str) -> Any:
+        """Get a diffusion pipeline for image generation.
+
+        Ensures the model is loaded in VRAM and returns the pipeline.
+        Only works for models with model_type="diffusion".
+
+        Args:
+            model_id: The diffusion model identifier (e.g., "flux2-dev-bnb4bit").
+
+        Returns:
+            Diffusion pipeline (e.g., Flux2Pipeline).
+
+        Raises:
+            ValueError: If model is not in profile or not a diffusion model.
+            MemoryError: If there's not enough VRAM and eviction failed.
+            RuntimeError: If diffusion backend is not available.
+        """
+        ...
+
+    def get_diffusion_client(self, model_id: str) -> Any:
+        """Get ComfyUI client for diffusion model image generation.
+
+        Used for NVFP4 models that run via ComfyUI backend instead of
+        in-process diffusers. Returns the ComfyUIClient for direct HTTP
+        communication with the ComfyUI server.
+
+        Args:
+            model_id: Diffusion model identifier (e.g., "flux2-dev-nvfp4").
+
+        Returns:
+            ComfyUIClient instance for image generation.
+
+        Raises:
+            ValueError: If model not in profile or not a diffusion model.
+            RuntimeError: If ComfyUI backend not configured.
+        """
+        ...
+
+    async def get_diffusion_context(self, model_id: str) -> Tuple[Any, Dict[str, Any]]:
+        """Get ComfyUI client and workflow config for diffusion model.
+
+        Ensures VRAM is available by calling request_load(), which may evict
+        LLMs if needed. The diffusion model is registered in the registry
+        for future eviction when LLMs need to load.
+
+        Returns both the client and the model-specific workflow configuration
+        from ModelCapabilities.options. This follows DIP by keeping model
+        configuration in the profile rather than hardcoded in the client.
+
+        Args:
+            model_id: Diffusion model identifier (e.g., "flux2-dev-nvfp4").
+
+        Returns:
+            Tuple of (ComfyUIClient, workflow_config dict).
+
+        Raises:
+            ValueError: If model not in profile or not a diffusion model.
+            RuntimeError: If ComfyUI backend not configured.
+            MemoryError: If there's not enough VRAM and eviction failed.
+        """
+        ...
+
+    async def warmup_diffusion_model(self, model_id: Optional[str] = None) -> bool:
+        """Pre-load diffusion model into VRAM by triggering a warmup workflow.
+
+        ComfyUI models load lazily on first workflow submission. This method
+        submits a tiny 64x64 image to trigger model loading before user requests.
+
+        Args:
+            model_id: Diffusion model ID. If None, uses profile's default image model.
+
+        Returns:
+            True if warmup succeeded, False otherwise.
+        """
+        ...
+
+
+class IComfyUICompletionWaiter(Protocol):
+    """Protocol for ComfyUI workflow completion detection.
+
+    Follows ISP - only defines the wait behavior, not connection management.
+    Implementations can use WebSocket, polling, or other mechanisms.
+    """
+
+    async def wait_for_completion(
+        self,
+        prompt_id: str,
+        timeout_seconds: float = 900
+    ) -> bool:
+        """Wait for a ComfyUI prompt to complete.
+
+        Args:
+            prompt_id: The ComfyUI prompt ID to wait for.
+            timeout_seconds: Maximum time to wait.
+
+        Returns:
+            True if completed successfully, False on error/timeout.
+        """
+        ...
+
+    @property
+    def is_connected(self) -> bool:
+        """Whether the waiter is ready to receive events."""
         ...
 
 

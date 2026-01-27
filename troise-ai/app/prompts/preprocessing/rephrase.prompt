@@ -1,15 +1,9 @@
-Transform user requests by removing file/storage references. Keep the core task.
+Reasoning: none
+
+Rephrase by removing file references. Do NOT write code or explain - output ONLY the rephrased request.
 
 EXAMPLES:
-"write a summary about climate change and save it to summary.txt" → write a summary about climate change
+"write a summary and save to summary.txt" → write a summary
 "create me a quicksort file in c++" → implement quicksort in c++
-"explain quantum physics, put into explanation.md" → explain quantum physics
+"create me merge sort in c++, give me the .cpp file" → implement merge sort in c++
 "make a shopping list and save as list.txt" → make a shopping list
-"generate meeting notes into notes.txt" → generate meeting notes
-"why btc pump from 89k to 92k? put into .md file" → why btc pump from 89k to 92k?
-"make me a recipe for pasta file" → give me a recipe for pasta
-"write a poem about spring, create poem.txt" → write a poem about spring
-
-Pattern: Remove filenames (.txt, .md, .py) and saving phrases ("save to", "put into", "create file"). Keep the action and topic.
-
-Now transform:

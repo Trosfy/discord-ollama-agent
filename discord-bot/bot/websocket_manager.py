@@ -5,8 +5,11 @@ sys.path.insert(0, '/shared')
 import websockets
 import json
 import asyncio
+import hashlib
+import hmac
 from typing import Callable, Optional
 import logging_client
+from bot.config import settings
 
 # Initialize logger
 logger = logging_client.setup_logger('discord-bot')
@@ -30,6 +33,23 @@ class WebSocketManager:
         self.max_reconnect_delay = 60  # Cap exponential backoff
         self.ping_task: Optional[asyncio.Task] = None  # Heartbeat task
 
+    def _generate_bot_token(self, bot_id: str) -> str:
+        """Generate HMAC signature for bot authentication.
+
+        Args:
+            bot_id: Bot identifier
+
+        Returns:
+            HMAC signature or empty string if no secret configured
+        """
+        if not settings.BOT_SECRET:
+            return ""
+        return hmac.new(
+            settings.BOT_SECRET.encode(),
+            bot_id.encode(),
+            hashlib.sha256
+        ).hexdigest()
+
     async def connect(self, bot_id: str):
         """
         Connect to TROISE AI WebSocket.
@@ -40,8 +60,13 @@ class WebSocketManager:
         # Store bot_id for reconnection
         self.bot_id = bot_id
 
+        # Generate HMAC token for authentication
+        bot_token = self._generate_bot_token(bot_id)
+
         # Build URL with query parameters (TROISE AI native protocol)
         ws_url = f"{self.troise_url}/ws/chat?interface=discord&user_id={bot_id}"
+        if bot_token:
+            ws_url += f"&token={bot_token}"
 
         try:
             # Connect with longer ping interval (60s) and timeout (120s)

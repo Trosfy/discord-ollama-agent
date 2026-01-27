@@ -134,14 +134,16 @@ class QueueWorker:
                     )
                     return
 
-            # Get timeout for this request type
-            timeout = self._config.get_timeout_for_type(request.routing_type)
+            # Get timeout for this request type (classification-aware)
+            classification = getattr(request.routing_result, 'classification', None) \
+                if request.routing_result else None
+            timeout = self._config.get_timeout_for_type(request.routing_type, classification)
             # Add buffer for cleanup
             timeout_with_buffer = timeout + self._config.timeout_buffer_seconds
 
             logger.debug(
                 f"Worker {self._id} processing {request.request_id} "
-                f"(type={request.routing_type}, timeout={timeout}s)"
+                f"(type={request.routing_type}, classification={classification}, timeout={timeout}s)"
             )
 
             # ========== EXECUTION ==========

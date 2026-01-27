@@ -2,6 +2,8 @@
 import sys
 sys.path.insert(0, '/shared')
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging_client
@@ -10,6 +12,9 @@ from app.config import settings
 
 # Initialize logger
 logger = logging_client.setup_logger('admin-service')
+
+# Silence verbose httpx logging (HTTP request logs)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Create FastAPI app
 app = FastAPI(

@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..context import ExecutionContext
+    from ..streaming import AgentStreamHandler
 
 
 # =============================================================================
@@ -112,11 +113,21 @@ class IGraphNode(Protocol):
         """Unique identifier for this node."""
         ...
 
+    @property
+    def streaming(self) -> bool:
+        """Whether this node streams output to user (default: True).
+
+        Internal nodes (code_reviewer, debugger) should set this to False
+        to prevent internal output (like VERDICT) from leaking to the user.
+        """
+        ...
+
     async def execute(
         self,
         state: GraphState,
         context: "ExecutionContext",
         input_text: Optional[str] = None,
+        stream_handler: Optional["AgentStreamHandler"] = None,
     ) -> NodeResult:
         """Execute this node.
 
@@ -124,6 +135,7 @@ class IGraphNode(Protocol):
             state: Current graph state (read/write).
             context: Execution context with user info, cancellation, etc.
             input_text: Optional input text (typically for first node).
+            stream_handler: Optional handler for WebSocket streaming.
 
         Returns:
             NodeResult with content, success status, and state updates.

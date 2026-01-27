@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ChatMessage, Message } from "@/components/chat/ChatMessage";
 import { ChatInputContainer } from "@/components/chat/ChatInputContainer";
@@ -11,14 +11,41 @@ import { useConversationStore } from "@/stores/conversationStore";
 import { HistoryMessage } from "@/infrastructure/websocket/ChatWebSocket";
 import { Toaster, toast } from "sonner";
 import { ArrowDown } from "lucide-react";
+import { Message as DomainMessage } from "@/domain/entities/Conversation";
 
 export default function ChatPage() {
   const params = useParams();
   const router = useRouter();
   const conversationId = (params?.id as string) || "new";
 
-  const [messages, setMessages] = useState<Message[]>([]);
-  const { conversations, addConversation, updateConversation, getConversation, setCurrentConversation } = useConversationStore();
+  // Use conversationStore as single source of truth for messages
+  const {
+    conversations,
+    addConversation,
+    updateConversation,
+    deleteConversation,
+    getConversation,
+    setCurrentConversation,
+    addMessage,
+    setMessages: setStoreMessages,
+    deleteMessage: deleteStoreMessage,
+  } = useConversationStore();
+
+  // Derive messages from conversationStore
+  const conversation = getConversation(conversationId);
+  const messages: Message[] = useMemo(() => {
+    return (conversation?.messages || []).map((msg: DomainMessage) => ({
+      id: msg.id,
+      role: msg.role,
+      content: msg.content,
+      timestamp: typeof msg.timestamp === "string" ? new Date(msg.timestamp) : msg.timestamp,
+      tokensUsed: msg.tokensUsed,
+      outputTokens: (msg as any).outputTokens,
+      totalTokensGenerated: (msg as any).totalTokensGenerated,
+      model: msg.model,
+      generationTime: (msg as any).generationTime,
+    }));
+  }, [conversation?.messages]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -27,24 +54,50 @@ export default function ChatPage() {
   const [streamingModelName, setStreamingModelName] = useState<string | null>(null); // Track model being used for current stream
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null); // Track which message is being edited
 
-  // Handle history loaded from backend
+  // Handle session start - sync frontend conversation ID with backend session ID
+  const handleSessionStart = useCallback((backendSessionId: string) => {
+    // If backend returned a different session ID, update our conversation to match
+    if (backendSessionId && backendSessionId !== conversationId) {
+      console.log(`[ChatPage] Syncing session ID: ${conversationId} → ${backendSessionId}`);
+
+      // Get current conversation data
+      const conversation = getConversation(conversationId);
+      if (conversation) {
+        // Create new conversation with backend's session ID, preserving data
+        const syncedConversation = {
+          ...conversation,
+          id: backendSessionId,
+        };
+
+        // Delete old conversation and add synced one
+        deleteConversation(conversationId);
+        addConversation(syncedConversation);
+        setCurrentConversation(backendSessionId);
+      }
+
+      // Navigate to new URL with backend session ID (replace to avoid history issues)
+      router.replace(`/chat/${backendSessionId}`);
+    }
+  }, [conversationId, getConversation, deleteConversation, addConversation, setCurrentConversation, router]);
+
+  // Handle history loaded from backend - save to conversationStore
   const handleHistoryLoaded = useCallback((historyMessages: HistoryMessage[]) => {
     if (historyMessages.length > 0) {
-      const loadedMessages: Message[] = historyMessages.map((msg) => ({
+      const loadedMessages: DomainMessage[] = historyMessages.map((msg) => ({
         id: msg.id,
-        role: msg.role,
+        role: msg.role as "user" | "assistant" | "system",
         content: msg.content,
-        timestamp: new Date(msg.timestamp),
+        timestamp: new Date(msg.timestamp).toISOString(),
         tokensUsed: msg.tokensUsed,
         outputTokens: msg.outputTokens,
         totalTokensGenerated: msg.totalTokensGenerated,
-        model: msg.model, // Include model from history
-        generationTime: msg.generationTime, // Include for tokens/sec calculation
+        model: msg.model,
+        generationTime: msg.generationTime,
       }));
-      setMessages(loadedMessages);
-      console.log(`[ChatPage] Loaded ${loadedMessages.length} messages from history`);
+      setStoreMessages(conversationId, loadedMessages);
+      console.log(`[ChatPage] Loaded ${loadedMessages.length} messages from history to store`);
     }
-  }, [conversationId]);
+  }, [conversationId, setStoreMessages]);
 
   // WebSocket streaming
   const {
@@ -61,18 +114,12 @@ export default function ChatPage() {
     resetStream,
   } = useChatStream({
     conversationId,
+    onSessionStart: handleSessionStart,
     onError: (error) => {
       toast.error(`Connection error: ${error}`);
     },
     onHistoryLoaded: handleHistoryLoaded,
   });
-
-  // Sync messages to conversation store
-  useEffect(() => {
-    if (messages.length > 0) {
-      updateConversation(conversationId, { messages: messages as unknown[] });
-    }
-  }, [messages, conversationId, updateConversation]);
 
   // Check if user is near bottom of scroll
   const isNearBottom = useCallback(() => {
@@ -103,52 +150,52 @@ export default function ChatPage() {
     scrollToBottom();
   }, [messages, streamingContent, scrollToBottom]);
 
-  // When streaming completes, add the message to history
+  // When streaming completes, add the message to conversationStore
   useEffect(() => {
     if (!isStreaming && streamingContent && (tokensUsed !== null || outputTokens !== null)) {
-      const assistantMessage: Message = {
+      const assistantMessage: DomainMessage = {
         id: Date.now().toString(),
         role: "assistant",
         content: streamingContent,
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
         tokensUsed: tokensUsed ?? undefined,
         outputTokens: outputTokens ?? undefined,
         totalTokensGenerated: totalTokensGenerated ?? undefined,
         generationTime: generationTime ?? undefined,
-        model: modelUsed || undefined, // Include the actual model used from backend
+        model: modelUsed || undefined,
       };
 
-      setMessages((prev) => [...prev, assistantMessage]);
+      addMessage(conversationId, assistantMessage);
       resetStream();
-      setStreamingModelName(null); // Clear the streaming model name
+      setStreamingModelName(null);
     }
-  }, [isStreaming, streamingContent, tokensUsed, outputTokens, totalTokensGenerated, generationTime, modelUsed, resetStream, conversationId, updateConversation]);
+  }, [isStreaming, streamingContent, tokensUsed, outputTokens, totalTokensGenerated, generationTime, modelUsed, resetStream, conversationId, addMessage]);
 
   const handleSendMessage = async (
     content: string,
-    fileRefs: Array<{ file_id: string; filename: string; content_type: string; extracted_content?: string }>,
+    fileRefs: Array<{ file_id: string; filename?: string; mimetype: string; extracted_content?: string }>,
     modelId: string
   ) => {
     // Build display content
     let displayContent = content;
     if (fileRefs.length > 0 && !content) {
-      const attachmentNames = fileRefs.map(f => f.filename).join(", ");
+      const attachmentNames = fileRefs.map(f => f.filename || "file").join(", ");
       displayContent = `[Attached: ${attachmentNames}]`;
     }
 
-    // Add user message
-    const userMessage: Message = {
+    // Add user message to conversationStore
+    const userMessage: DomainMessage = {
       id: Date.now().toString(),
       role: "user",
       content: displayContent,
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
     };
 
-    setMessages((prev) => [...prev, userMessage]);
+    addMessage(conversationId, userMessage);
 
     // Update conversation title from first message if still "New Chat"
-    const conversation = getConversation(conversationId);
-    if (conversation && conversation.title === "New Chat" && messages.length === 0) {
+    const currentConv = getConversation(conversationId);
+    if (currentConv && currentConv.title === "New Chat" && messages.length === 0) {
       const title = displayContent.length > 50 ? displayContent.substring(0, 50) + "..." : displayContent;
       updateConversation(conversationId, { title });
     }
@@ -188,13 +235,14 @@ export default function ChatPage() {
       setCurrentConversation(emptyNewChat.id);
       router.push(`/chat/${emptyNewChat.id}`);
     } else {
-      // Create new conversation
+      // Create new conversation with empty messages array
       const newConversation = {
         id: Date.now().toString(),
         title: "New Chat",
         createdAt: new Date(),
         updatedAt: new Date(),
         archived: false,
+        messages: [],
       };
       addConversation(newConversation);
       router.push(`/chat/${newConversation.id}`);
@@ -215,13 +263,13 @@ export default function ChatPage() {
 
     if (lastUserMessage) {
       // Remove the assistant message and regenerate
-      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      deleteStoreMessage(conversationId, messageId);
       sendMessage(lastUserMessage.content);
     }
   };
 
   const handleDelete = (messageId: string) => {
-    setMessages((prev) => prev.filter((m) => m.id !== messageId));
+    deleteStoreMessage(conversationId, messageId);
     toast.success("Message deleted");
   };
 
@@ -239,18 +287,30 @@ export default function ChatPage() {
 
     if (messageIndex === -1) return;
 
-    // Get all messages up to (but not including) the edited message
-    const newMessages = messages.slice(0, messageIndex);
+    // Get messages to keep (up to but not including the edited one)
+    const messagesToKeep = messages.slice(0, messageIndex);
 
     // Create the updated message
-    const editedMessage: Message = {
-      ...messages[messageIndex],
+    const editedMessage: DomainMessage = {
+      id: messages[messageIndex].id,
+      role: messages[messageIndex].role,
       content: newContent,
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
     };
 
-    // Update messages state (removes all subsequent messages)
-    setMessages([...newMessages, editedMessage]);
+    // Update store: set messages to kept ones plus edited
+    const updatedMessages: DomainMessage[] = [
+      ...messagesToKeep.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        timestamp: typeof m.timestamp === "string" ? m.timestamp : m.timestamp.toISOString(),
+        tokensUsed: m.tokensUsed,
+        model: m.model,
+      })),
+      editedMessage,
+    ];
+    setStoreMessages(conversationId, updatedMessages);
     setEditingMessageId(null);
 
     // Send edited message to get new AI response

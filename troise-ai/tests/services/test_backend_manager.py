@@ -529,3 +529,129 @@ async def test_backend_manager_ssh_incomplete_config(mock_config):
     result = await manager._get_ssh()
 
     assert result is None
+
+
+# =============================================================================
+# DiffusionClient Tests
+# =============================================================================
+
+from app.services.backend_manager import DiffusionClient
+
+
+async def test_diffusion_load_model_already_loaded():
+    """DiffusionClient.load_model() returns True for already loaded model."""
+    client = DiffusionClient()
+    client._pipelines["flux2-dev-bnb4bit"] = MagicMock()  # Simulate loaded
+
+    result = await client.load_model("flux2-dev-bnb4bit")
+
+    assert result is True
+
+
+async def test_diffusion_load_model_success():
+    """DiffusionClient.load_model() loads pipeline successfully."""
+    client = DiffusionClient()
+    mock_pipeline = MagicMock()
+
+    with patch.object(client, '_load_diffusion_pipeline', return_value=mock_pipeline):
+        result = await client.load_model("flux2-dev-bnb4bit")
+
+    assert result is True
+    assert "flux2-dev-bnb4bit" in client._pipelines
+    assert client._pipelines["flux2-dev-bnb4bit"] == mock_pipeline
+
+
+async def test_diffusion_load_model_failure():
+    """DiffusionClient.load_model() returns False on error."""
+    client = DiffusionClient()
+
+    with patch.object(client, '_load_diffusion_pipeline', side_effect=ValueError("Unknown")):
+        result = await client.load_model("unknown-model")
+
+    assert result is False
+    assert "unknown-model" not in client._pipelines
+
+
+async def test_diffusion_unload_model_success():
+    """DiffusionClient.unload_model() removes pipeline and clears cache."""
+    client = DiffusionClient()
+    client._pipelines["flux2-dev-bnb4bit"] = MagicMock()
+
+    with patch("torch.cuda.empty_cache") as mock_cache:
+        result = await client.unload_model("flux2-dev-bnb4bit")
+
+    assert result is True
+    assert "flux2-dev-bnb4bit" not in client._pipelines
+    mock_cache.assert_called_once()
+
+
+async def test_diffusion_unload_model_not_loaded():
+    """DiffusionClient.unload_model() returns True for non-loaded model."""
+    client = DiffusionClient()
+
+    result = await client.unload_model("not-loaded")
+
+    assert result is True
+
+
+async def test_diffusion_list_loaded():
+    """DiffusionClient.list_loaded() returns loaded pipelines."""
+    client = DiffusionClient()
+    client._pipelines["flux2-dev-bnb4bit"] = MagicMock()
+    client._pipelines["sd-xl"] = MagicMock()
+
+    result = await client.list_loaded()
+
+    assert len(result) == 2
+    names = [m["name"] for m in result]
+    assert "flux2-dev-bnb4bit" in names
+    assert "sd-xl" in names
+    for m in result:
+        assert m["backend"] == "diffusion"
+
+
+async def test_diffusion_list_loaded_empty():
+    """DiffusionClient.list_loaded() returns empty list when none loaded."""
+    client = DiffusionClient()
+
+    result = await client.list_loaded()
+
+    assert result == []
+
+
+async def test_diffusion_health_check():
+    """DiffusionClient.health_check() always returns True (in-process)."""
+    client = DiffusionClient()
+
+    result = await client.health_check()
+
+    assert result is True
+
+
+def test_diffusion_get_pipeline_loaded():
+    """DiffusionClient.get_pipeline() returns loaded pipeline."""
+    client = DiffusionClient()
+    mock_pipe = MagicMock()
+    client._pipelines["flux2-dev-bnb4bit"] = mock_pipe
+
+    result = client.get_pipeline("flux2-dev-bnb4bit")
+
+    assert result == mock_pipe
+
+
+def test_diffusion_get_pipeline_not_loaded():
+    """DiffusionClient.get_pipeline() returns None for non-loaded model."""
+    client = DiffusionClient()
+
+    result = client.get_pipeline("not-loaded")
+
+    assert result is None
+
+
+def test_backend_manager_creates_diffusion_client(mock_config):
+    """BackendManager creates DiffusionClient for diffusion backend."""
+    mock_config.backends["diffusion"] = BackendConfig(type="diffusion", host="local")
+    manager = BackendManager(mock_config)
+
+    assert "diffusion" in manager._clients
+    assert isinstance(manager._clients["diffusion"], DiffusionClient)

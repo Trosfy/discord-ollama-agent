@@ -59,13 +59,14 @@ export function TopBar({ onMenuClick, isMobile, isSidebarOpen }: TopBarProps) {
       setCurrentConversation(emptyNewChat.id);
       router.push(`/chat/${emptyNewChat.id}`);
     } else {
-      // Create new conversation
+      // Create new conversation with empty messages array
       const newConversation = {
         id: Date.now().toString(),
         title: "New Chat",
         createdAt: new Date(),
         updatedAt: new Date(),
         archived: false,
+        messages: [],
       };
       addConversation(newConversation);
       router.push(`/chat/${newConversation.id}`);

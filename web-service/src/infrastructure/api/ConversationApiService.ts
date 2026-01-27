@@ -1,8 +1,8 @@
 /**
  * Conversation API Service
  *
- * Service for managing conversations via WebSocket.
- * Handles close/delete operations by opening a temporary connection.
+ * Service for managing conversations via REST API.
+ * Handles CRUD operations for conversations.
  */
 
 import { API_CONFIG } from "@/config/api.config";
@@ -14,80 +14,38 @@ export interface CloseConversationResult {
 }
 
 /**
- * Close a conversation and delete all messages from DynamoDB
- * Opens a temporary WebSocket connection, sends close command, and waits for response
+ * Delete a conversation and all messages from DynamoDB via REST API
  */
-export async function closeConversation(conversationId: string): Promise<CloseConversationResult> {
-  return new Promise((resolve) => {
-    const wsUrl = API_CONFIG.ENDPOINTS.WS.CHAT(conversationId);
-    console.log(`[ConversationAPI] Closing conversation: ${conversationId}`);
+export async function closeConversation(
+  conversationId: string,
+  userId: string
+): Promise<CloseConversationResult> {
+  const deleteUrl = `${API_CONFIG.BASE_URL}/sessions/${userId}/${conversationId}`;
+  console.log(`[ConversationAPI] Deleting conversation: ${conversationId}`);
 
-    let ws: WebSocket | null = null;
-    let timeoutId: NodeJS.Timeout | null = null;
+  try {
+    const response = await fetch(deleteUrl, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+    });
 
-    const cleanup = () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
-    };
-
-    try {
-      ws = new WebSocket(wsUrl);
-
-      // Timeout after 10 seconds
-      timeoutId = setTimeout(() => {
-        console.error("[ConversationAPI] Close request timed out");
-        cleanup();
-        resolve({ success: false, error: "Request timed out" });
-      }, 10000);
-
-      ws.onopen = () => {
-        console.log(`[ConversationAPI] Connected, sending close request`);
-        ws?.send(JSON.stringify({
-          type: "close",
-          conversation_id: conversationId,
-        }));
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          
-          if (data.type === "close_complete") {
-            console.log(`[ConversationAPI] Close complete: ${data.deleted_count} messages deleted`);
-            cleanup();
-            resolve({ success: true, deletedCount: data.deleted_count });
-          } else if (data.type === "error") {
-            console.error(`[ConversationAPI] Error:`, data.error);
-            cleanup();
-            resolve({ success: false, error: data.error });
-          }
-        } catch (err) {
-          console.error("[ConversationAPI] Failed to parse message:", err);
-        }
-      };
-
-      ws.onerror = (error) => {
-        console.error("[ConversationAPI] WebSocket error:", error);
-        cleanup();
-        resolve({ success: false, error: "Connection error" });
-      };
-
-      ws.onclose = () => {
-        // If we haven't resolved yet, treat as success (connection closed normally)
-        console.log("[ConversationAPI] Connection closed");
-      };
-    } catch (err) {
-      console.error("[ConversationAPI] Failed to create WebSocket:", err);
-      cleanup();
-      resolve({ success: false, error: "Failed to connect" });
+    if (response.ok) {
+      const data = await response.json();
+      console.log(`[ConversationAPI] Delete complete: ${data.session_id}`);
+      return { success: true, deletedCount: 1 };
+    } else if (response.status === 404) {
+      // Session not found in backend = treat as success (local-only conversation)
+      console.log(`[ConversationAPI] Session not in backend, removing locally`);
+      return { success: true, deletedCount: 0 };
+    } else {
+      const errorData = await response.json().catch(() => ({}));
+      console.error(`[ConversationAPI] Delete failed:`, errorData);
+      return { success: false, error: errorData.detail || "Delete failed" };
     }
-  });
+  } catch (err) {
+    console.error("[ConversationAPI] Delete request failed:", err);
+    return { success: false, error: "Network error" };
+  }
 }
 
 /**

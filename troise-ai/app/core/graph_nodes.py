@@ -39,6 +39,7 @@ class AgentNode:
         state_key: Optional[str] = None,
         tool_override: Optional[List[str]] = None,
         tool_limits: Optional[Dict[str, int]] = None,
+        streaming: bool = True,
     ):
         """Initialize agent node.
 
@@ -51,13 +52,21 @@ class AgentNode:
                           Allows graph YAML to specify per-node tool lists.
             tool_limits: Optional tool call limits (e.g., {"web_fetch": 3}).
                         Limits persist for the entire node execution.
+            streaming: Whether this node streams output to user (default: True).
+                      Set to False for internal nodes to prevent output leaking.
         """
         self._agent = agent
         self._prompt_variant = prompt_variant
         self._state_key = state_key or agent.name
         self._tool_override = tool_override
         self._tool_limits = tool_limits or {}
+        self._streaming = streaming
         self.name = agent.name
+
+    @property
+    def streaming(self) -> bool:
+        """Whether this node streams output to user."""
+        return self._streaming
 
     @property
     def tools(self) -> List[str]:
@@ -70,6 +79,7 @@ class AgentNode:
         context: "ExecutionContext",
         input_text: Optional[str] = None,
         tool_factory: Optional["ToolFactory"] = None,
+        stream_handler: Optional["AgentStreamHandler"] = None,
     ) -> NodeResult:
         """Execute the agent as a graph node.
 
@@ -78,6 +88,7 @@ class AgentNode:
             context: Execution context.
             input_text: Input text for the agent.
             tool_factory: Factory for creating agent-specific tools (respects skip_universal_tools).
+            stream_handler: Optional handler for WebSocket streaming.
 
         Returns:
             NodeResult with agent output and state updates.
@@ -115,7 +126,7 @@ class AgentNode:
             result = await self._agent.execute(
                 input=agent_input,
                 context=context,
-                stream_handler=None,  # Streaming handled at graph level
+                stream_handler=stream_handler,
             )
 
             # Build state updates
@@ -198,9 +209,10 @@ class AgentNode:
         }
 
         # Extract structured data from metadata if present
+        # Include model for token metrics propagation in graph execution
         if hasattr(result, "metadata") and result.metadata:
             for key, value in result.metadata.items():
-                if key not in ("agent", "model", "tools_used"):
+                if key not in ("agent", "tools_used"):
                     updates[f"{self._state_key}_{key}"] = value
 
         return updates
@@ -227,6 +239,7 @@ class CodeReviewerNode(AgentNode):
         context: "ExecutionContext",
         input_text: Optional[str] = None,
         tool_factory: Optional["ToolFactory"] = None,
+        stream_handler: Optional["AgentStreamHandler"] = None,
     ) -> NodeResult:
         """Execute code review with smart passthrough.
 
@@ -235,6 +248,7 @@ class CodeReviewerNode(AgentNode):
             context: Execution context.
             input_text: Input text (code from previous node).
             tool_factory: Factory for creating agent-specific tools.
+            stream_handler: Optional handler for WebSocket streaming.
 
         Returns:
             NodeResult with appropriate content based on verdict:
@@ -245,7 +259,7 @@ class CodeReviewerNode(AgentNode):
         self._input_code = input_text
 
         # Execute normal review
-        result = await super().execute(state, context, input_text, tool_factory)
+        result = await super().execute(state, context, input_text, tool_factory, stream_handler)
 
         # Determine output based on review result
         # Check review_passed from state_updates (set by _extract_state_updates)
@@ -284,8 +298,13 @@ class CodeReviewerNode(AgentNode):
         - VERDICT: APPROVED → code passes review
         - VERDICT: NEEDS_REVISION → code needs fixes
         """
+        import re
+
         updates = super()._extract_state_updates(result)
-        content = result.content.lower()
+
+        # Strip markdown formatting (bold, italic) before checking verdicts
+        # This handles **VERDICT: APPROVED** and similar patterns
+        content = re.sub(r'\*+', '', result.content.lower())
 
         # Parse explicit verdicts (matches prompt format)
         approved = "verdict: approved" in content
@@ -452,6 +471,7 @@ class SwarmNode:
         max_handoffs: int = 20,
         max_iterations: int = 20,
         state_key: Optional[str] = None,
+        streaming: bool = True,
     ):
         """Initialize swarm node with deferred agent creation.
 
@@ -462,6 +482,7 @@ class SwarmNode:
             max_handoffs: Maximum handoffs between agents (default 20).
             max_iterations: Maximum iterations (default 20).
             state_key: Optional key for storing output in state.
+            streaming: Whether this node streams output to user (default: True).
         """
         self._agent_configs = agent_configs
         self._entry_point_name = entry_point_name
@@ -469,6 +490,12 @@ class SwarmNode:
         self._max_iterations = max_iterations
         self.name = name
         self._state_key = state_key or name
+        self._streaming = streaming
+
+    @property
+    def streaming(self) -> bool:
+        """Whether this node streams output to user."""
+        return self._streaming
 
     @property
     def tools(self) -> List[str]:
@@ -486,6 +513,7 @@ class SwarmNode:
         context: "ExecutionContext",
         input_text: Optional[str] = None,
         tool_factory: Optional["ToolFactory"] = None,
+        stream_handler: Optional["AgentStreamHandler"] = None,
     ) -> NodeResult:
         """Execute the swarm as a graph node.
 
@@ -497,6 +525,7 @@ class SwarmNode:
             context: Execution context (must have vram_orchestrator).
             input_text: Input text for the swarm.
             tool_factory: Factory for tools (param for interface consistency).
+            stream_handler: Optional handler for WebSocket streaming (unused, for interface consistency).
 
         Returns:
             NodeResult with swarm output and state updates.

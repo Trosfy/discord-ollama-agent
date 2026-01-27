@@ -10,6 +10,7 @@ from .sanitizer import ContentSanitizer
 from .handlers import (
     IArtifactHandler,
     ToolArtifactHandler,
+    ImageArtifactHandler,
     LLMExtractionHandler,
     RegexFallbackHandler,
 )
@@ -23,6 +24,7 @@ __all__ = [
     # Handlers
     "IArtifactHandler",
     "ToolArtifactHandler",
+    "ImageArtifactHandler",
     "LLMExtractionHandler",
     "RegexFallbackHandler",
 ]

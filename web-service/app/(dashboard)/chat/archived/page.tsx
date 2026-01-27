@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useConversationStore } from "@/stores/conversationStore";
+import { useAuthStore } from "@/stores/authStore";
 import { closeConversation } from "@/infrastructure/api/ConversationApiService";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ import {
 export default function ArchivedChatsPage() {
   const router = useRouter();
   const { conversations, updateConversation, deleteConversation } = useConversationStore();
+  const { user } = useAuthStore();
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
 
@@ -58,7 +60,7 @@ export default function ArchivedChatsPage() {
     setDeletingId(id);
     try {
       // Call backend to delete from DynamoDB
-      const result = await closeConversation(id);
+      const result = await closeConversation(id, user?.id || "anonymous");
 
       if (result.success) {
         // Remove from local store

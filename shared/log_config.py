@@ -25,6 +25,10 @@ class LogSettings(BaseSettings):
     DEBUG_LOG_LEVEL: str = "DEBUG"
     ERROR_LOG_LEVEL: str = "ERROR"
 
+    # Third-party loggers to silence (set to WARNING level)
+    # Can be overridden via NOISY_LOGGERS env var (comma-separated)
+    NOISY_LOGGERS: str = "botocore,boto3,aioboto3,aiobotocore,urllib3,httpx,httpcore,asyncio,websockets,sse_starlette"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True

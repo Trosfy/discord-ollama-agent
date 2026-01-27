@@ -193,32 +193,51 @@ class BaseAgent(ABC):
         model = None
 
         try:
-            # Get model from VRAM orchestrator
+            # Get effective model and temperature from user_config (if provided)
+            model_id = self._model_id
+            temperature = self._temperature
+
+            if context.user_config:
+                if context.user_config.model:
+                    model_id = context.user_config.model
+                    logger.info(f"Using user-specified model: {model_id}")
+                if context.user_config.temperature is not None:
+                    temperature = context.user_config.temperature
+                    logger.info(f"Using user-specified temperature: {temperature}")
+
             # Build additional_args for thinking level override
+            # Priority: user_config.thinking_enabled > agent's _thinking_level
             additional_args = None
-            if self._thinking_level:
+            if context.user_config and context.user_config.thinking_enabled is not None:
+                # User explicitly set thinking preference
+                if context.user_config.thinking_enabled:
+                    additional_args = {"think": self._thinking_level or "medium"}
+                # If thinking_enabled=False, leave additional_args=None (disabled)
+            elif self._thinking_level:
+                # Fall back to agent's default thinking level
                 additional_args = {"think": self._thinking_level}
 
             model = await self._vram_orchestrator.get_model(
-                self._model_id,
-                temperature=self._temperature,
+                model_id,
+                temperature=temperature,
                 max_tokens=self._max_tokens,
                 additional_args=additional_args,
             )
 
-            # Create hook for URL capture from web_fetch
-            from .hooks import SourceCaptureHook
+            # Create hooks for capturing tool results
+            from .hooks import SourceCaptureHook, ImageCaptureHook
             source_hook = SourceCaptureHook(context)
+            image_hook = ImageCaptureHook(context)
 
-            # Create Strands agent with hook
+            # Create Strands agent with hooks
             agent = Agent(
                 model=model,
                 tools=self._tools,
                 system_prompt=system_prompt,
-                hooks=[source_hook],
+                hooks=[source_hook, image_hook],
             )
 
-            logger.info(f"Starting {self.name} agent with model {self._model_id}")
+            logger.info(f"Starting {self.name} agent with model {model_id}")
 
             # Build input with conversation history
             input_with_history = self._build_input_with_history(input, context)
@@ -226,6 +245,7 @@ class BaseAgent(ABC):
             # Collect streamed response
             full_response = ""
             event_count = 0
+            token_usage = {}  # Capture token metrics from metadata event
 
             async for event in agent.stream_async(input_with_history):
                 event_count += 1
@@ -257,6 +277,19 @@ class BaseAgent(ABC):
                             "id": start["toolUse"].get("toolUseId"),
                         })
 
+                # Capture metadata event with token counts (normalized by Strands SDK)
+                # ExtendedOpenAIModel adds reasoningTokens for thinking models
+                elif "metadata" in inner_event:
+                    meta = inner_event["metadata"]
+                    if "usage" in meta:
+                        token_usage = {
+                            "input_tokens": meta["usage"].get("inputTokens"),
+                            "output_tokens": meta["usage"].get("outputTokens"),
+                            "total_tokens": meta["usage"].get("totalTokens"),
+                            "reasoning_tokens": meta["usage"].get("reasoningTokens"),
+                        }
+                        logger.debug(f"Token usage captured: {token_usage}")
+
             # Finalize streaming
             if stream_handler:
                 await stream_handler.finalize()
@@ -266,7 +299,7 @@ class BaseAgent(ABC):
             return AgentResult(
                 content=full_response,
                 tool_calls=tool_calls,
-                metadata=self._build_metadata(tool_calls),
+                metadata=self._build_metadata(tool_calls, token_usage),
             )
 
         except Exception as e:
@@ -285,7 +318,11 @@ class BaseAgent(ABC):
             if model and hasattr(model, 'close'):
                 await model.close()
 
-    def _build_metadata(self, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _build_metadata(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        token_usage: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Build metadata for agent result.
 
@@ -293,15 +330,20 @@ class BaseAgent(ABC):
 
         Args:
             tool_calls: List of tool calls made during execution.
+            token_usage: Optional token usage from Strands SDK metadata event.
 
         Returns:
             Metadata dictionary.
         """
-        return {
+        metadata = {
             "agent": self.name,
             "model": self._model_id,
             "tools_used": [tc["name"] for tc in tool_calls],
         }
+        # Merge token usage if captured from metadata event
+        if token_usage:
+            metadata.update(token_usage)
+        return metadata
 
     @abstractmethod
     async def execute(

@@ -46,7 +46,7 @@ class ExplorerAgent(BaseAgent):
     name = "explorer"
     category = "shared"
     # Union of all exploration tools - variants use what they need
-    tools = ["read_file", "brain_search", "brain_fetch", "web_search", "web_fetch"]
+    tools = ["brain_search", "brain_fetch", "web_search", "web_fetch"]
 
     def __init__(
         self,

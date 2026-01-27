@@ -31,6 +31,11 @@ from .circuit_breaker import (
     CircuitBreakerMetrics,
     ICircuitBreaker,
 )
+from .auth import (
+    AuthResult,
+    IAuthStrategy,
+)
+from .output_strategy import IOutputStrategy
 from .graph import (
     GraphState,
     NodeResult,
@@ -78,6 +83,11 @@ __all__ = [
     "CircuitState",
     "CircuitBreakerMetrics",
     "ICircuitBreaker",
+    # Auth interfaces
+    "AuthResult",
+    "IAuthStrategy",
+    # Output strategy interface
+    "IOutputStrategy",
     # Graph interfaces
     "GraphState",
     "NodeResult",

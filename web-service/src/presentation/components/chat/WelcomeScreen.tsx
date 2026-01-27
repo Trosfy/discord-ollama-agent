@@ -23,8 +23,8 @@ interface SuggestedPrompt {
 
 interface FileReference {
   file_id: string;
-  filename: string;
-  content_type: string;
+  filename?: string;
+  mimetype: string;
   extracted_content?: string;
 }
 

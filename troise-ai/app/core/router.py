@@ -1,6 +1,6 @@
 """Router for TROISE AI.
 
-Routes user input to one of 4 classifications using LLM.
+Routes user input to one of 5 classifications using LLM.
 Simple plain-text response format for reliable parsing.
 
 Classifications:
@@ -8,6 +8,7 @@ Classifications:
 - RESEARCH: Deep research requiring web searches and multiple sources
 - CODE: Code writing, debugging, technical implementation
 - BRAINDUMP: Thought capture, organization, journaling
+- IMAGE: Image generation, creating pictures, artwork, visualizations
 
 Routes are loaded from app/config/routes.yaml for OCP compliance.
 """
@@ -37,6 +38,7 @@ class RoutingResult:
     reason: str  # Brief explanation for the routing decision
     confidence: float = 0.9  # Confidence score (0.0-1.0)
     fallback: bool = False  # True if this is a fallback to default
+    classification: str = None  # Original classification (GENERAL, CODE, IMAGE, etc.)
 
 
 def _load_route_map() -> Tuple[Dict[str, Tuple[str, str]], str, str]:
@@ -87,10 +89,10 @@ ROUTE_MAP, EXECUTION_MODE, DEFAULT_ROUTE = _load_route_map()
 
 class Router:
     """
-    Routes input to one of 4 classifications using LLM.
+    Routes input to one of 5 classifications using LLM.
 
     Uses a simple plain-text response format for reliable parsing.
-    The smaller routing table (4 options vs 40+) allows room for
+    The smaller routing table (5 options vs 40+) allows room for
     full file_context without overwhelming the router model.
 
     Uses VRAMOrchestrator.get_model() with additional_args=None to
@@ -106,27 +108,49 @@ class Router:
         # Or if mode=graph: result.type = "graph", result.name = "research_graph"
     """
 
-    ROUTING_PROMPT = """Reasoning: low
+    ROUTING_PROMPT = """Classify the request into exactly ONE category.
 
-You are a request classifier. Analyze the user's request and classify it.
+CRITICAL RULES (apply first):
+- Look at USER'S INTENT in the text, not just attachment presence
+- Analysis intent + attachment = GENERAL (or CODE if technical)
+  Keywords: "what is", "describe", "explain", "OCR", "read", "analyze", "summarize"
+- Generation intent = IMAGE (with or without reference attachment)
+  Keywords: "generate", "create", "draw", "make an image", "produce", "render", "similar to this"
+- No text + attachment = GENERAL (analyze by default)
+- IMAGE is for creating NEW images (can use attachment as reference)
 
-CLASSIFICATIONS:
+CATEGORIES:
+GENERAL - Chat, Q&A, explanations, analyzing files/images
+  ✓ "What does this image show?"
+  ✓ "Summarize this document"
+  ✓ "Explain quantum computing"
+  ✗ NOT: creating new images
 
-1. GENERAL - General chat, Q&A, explanations, simple tasks
-   Examples: "What is Python?", "Explain recursion", "Tell me about HTTP"
+CODE - Writing, debugging, building code
+  ✓ "Write a Python function"
+  ✓ "Fix this code" (with or without screenshot)
+  ✓ "Debug this error from screenshot"
 
-2. RESEARCH - Deep research requiring extensive web searches and many sources
-   Examples: "Research the history of Bitcoin regulation", "Find latest AI developments"
+RESEARCH - Deep research needing many web sources
+  ✓ "Research Bitcoin regulation history"
+  ✓ "Find all papers on transformer architecture"
 
-3. CODE - Code writing, debugging, technical implementation
-   Examples: "Write a function to reverse a string", "Fix this bug", "Build a REST API"
+BRAINDUMP - Thought capture, journaling, idea organization
+  ✓ "Let me dump my thoughts"
+  ✓ "Organize these ideas"
 
-4. BRAINDUMP - Thought capture, organization, journaling, brain dumps
-   Examples: "Let me dump my thoughts about...", "I need to organize my ideas"
+IMAGE - Generate NEW images (can use attachment as reference)
+  ✓ "Generate image of a sunset"
+  ✓ "Create picture of a cat"
+  ✓ "Generate something similar to this" + attachment
+  ✓ "Make this in watercolor style" + attachment
+  ✗ NOT: "What's in this image?" (= GENERAL)
+  ✗ NOT: "OCR this screenshot" (= GENERAL)
+  ✗ NOT: "Analyze this diagram" (= GENERAL)
 
-USER REQUEST: {user_input}
-{file_context_line}
-Output ONLY the classification name (e.g., "GENERAL" or "CODE"), nothing else."""
+{file_context_line}REQUEST: {user_input}
+
+Output ONLY the category name: GENERAL, CODE, RESEARCH, BRAINDUMP, or IMAGE"""
 
     def __init__(
         self,
@@ -155,6 +179,7 @@ Output ONLY the classification name (e.g., "GENERAL" or "CODE"), nothing else.""
         user_input: str,
         context: Optional[Dict[str, Any]] = None,
         file_context: Optional[str] = None,
+        has_attachments: bool = False,
     ) -> RoutingResult:
         """
         Route user input to appropriate handler.
@@ -163,14 +188,16 @@ Output ONLY the classification name (e.g., "GENERAL" or "CODE"), nothing else.""
             user_input: The user's message/request.
             context: Optional context dict (interface, user_id, etc.).
             file_context: Optional extracted file content (full, no truncation).
+            has_attachments: Whether user attached files (signals analysis vs generation).
 
         Returns:
             RoutingResult indicating which skill/agent to use.
         """
         # Build file context line for prompt (only if files present)
+        # Use explicit signal to help smaller models apply CRITICAL RULES
         file_context_line = ""
         if file_context:
-            file_context_line = f"ATTACHED FILE CONTENT:\n{file_context}\n"
+            file_context_line = f"[USER ATTACHED FILE]\nContent: {file_context}\n"
 
         # Build system prompt for classification
         system_prompt = self.ROUTING_PROMPT.format(
@@ -270,6 +297,7 @@ Output ONLY the classification name (e.g., "GENERAL" or "CODE"), nothing else.""
             reason="Fallback due to routing failure",
             confidence=0.5,
             fallback=True,
+            classification=self._default_route,
         )
 
     def _resolve_graph_fallback(self, classification: str) -> RoutingResult:
@@ -313,6 +341,7 @@ Output ONLY the classification name (e.g., "GENERAL" or "CODE"), nothing else.""
             name=route_name,
             reason=f"Classified as {classification}",
             confidence=0.9,
+            classification=classification,
         )
 
     def get_routing_table(self) -> str:

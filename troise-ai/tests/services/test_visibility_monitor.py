@@ -15,6 +15,10 @@ def mock_config():
     config.queue.visibility_timeout_seconds = 1.0  # Short timeout for testing
     config.queue.visibility_check_interval_seconds = 0.1  # Short interval for testing
     config.queue.max_retries = 2
+    # Classification-aware visibility timeout method (returns default for non-IMAGE)
+    config.queue.get_visibility_timeout_for_classification = MagicMock(
+        side_effect=lambda classification: 900 if classification == "IMAGE" else 5.0
+    )
     return config
 
 
@@ -45,6 +49,7 @@ def mock_request():
     request.session_id = "test-session"
     request.user_tier = UserTier.NORMAL
     request.routing_type = "agent"
+    request.routing_result = None  # No routing result (uses default timeout)
     request.retry_count = 0
     request.started_at = datetime.now(timezone.utc) - timedelta(seconds=10)  # Started 10s ago
     return request
@@ -123,7 +128,7 @@ class TestVisibilityMonitorStuckDetection:
         mock_queue.get_in_flight_snapshot.return_value = {}
 
         monitor = VisibilityMonitor(queue=mock_queue, config=mock_config)
-        await monitor._check_stuck_requests(timeout=1.0)
+        await monitor._check_stuck_requests(default_timeout=1.0)
 
         mock_queue.requeue_for_retry.assert_not_called()
         mock_queue.mark_failed.assert_not_called()
@@ -136,7 +141,7 @@ class TestVisibilityMonitorStuckDetection:
         mock_queue.get_in_flight_snapshot.return_value = {"test-id": mock_request}
 
         monitor = VisibilityMonitor(queue=mock_queue, config=mock_config)
-        await monitor._check_stuck_requests(timeout=5.0)  # 5s timeout, request is 10s old
+        await monitor._check_stuck_requests(default_timeout=5.0)  # 5s timeout, request is 10s old
 
         # Should trigger requeue since retry_count < max_retries
         mock_queue.requeue_for_retry.assert_called_once_with("test-id")
@@ -149,7 +154,7 @@ class TestVisibilityMonitorStuckDetection:
         mock_queue.get_in_flight_snapshot.return_value = {"test-id": mock_request}
 
         monitor = VisibilityMonitor(queue=mock_queue, config=mock_config)
-        await monitor._check_stuck_requests(timeout=10.0)  # 10s timeout, request is 1s old
+        await monitor._check_stuck_requests(default_timeout=10.0)  # 10s timeout, request is 1s old
 
         mock_queue.requeue_for_retry.assert_not_called()
         mock_queue.mark_failed.assert_not_called()
@@ -162,7 +167,7 @@ class TestVisibilityMonitorStuckDetection:
         mock_queue.get_in_flight_snapshot.return_value = {"test-id": mock_request}
 
         monitor = VisibilityMonitor(queue=mock_queue, config=mock_config)
-        await monitor._check_stuck_requests(timeout=5.0)
+        await monitor._check_stuck_requests(default_timeout=5.0)
 
         mock_queue.requeue_for_retry.assert_called_once_with("test-id")
         mock_queue.mark_failed.assert_not_called()
@@ -179,7 +184,7 @@ class TestVisibilityMonitorStuckDetection:
             config=mock_config,
             circuit_registry=mock_circuit_registry,
         )
-        await monitor._check_stuck_requests(timeout=5.0)
+        await monitor._check_stuck_requests(default_timeout=5.0)
 
         mock_queue.requeue_for_retry.assert_not_called()
         mock_queue.mark_failed.assert_called_once()
@@ -198,7 +203,7 @@ class TestVisibilityMonitorStuckDetection:
         mock_queue.get_in_flight_snapshot.return_value = {"test-id": mock_request}
 
         monitor = VisibilityMonitor(queue=mock_queue, config=mock_config)
-        await monitor._check_stuck_requests(timeout=5.0)
+        await monitor._check_stuck_requests(default_timeout=5.0)
 
         # Should still detect as stuck
         mock_queue.requeue_for_retry.assert_called_once()
@@ -210,7 +215,7 @@ class TestVisibilityMonitorStuckDetection:
         mock_queue.get_in_flight_snapshot.return_value = {"test-id": mock_request}
 
         monitor = VisibilityMonitor(queue=mock_queue, config=mock_config)
-        await monitor._check_stuck_requests(timeout=5.0)
+        await monitor._check_stuck_requests(default_timeout=5.0)
 
         mock_queue.requeue_for_retry.assert_not_called()
         mock_queue.mark_failed.assert_not_called()
@@ -231,7 +236,7 @@ class TestVisibilityMonitorCircuitBreakerIntegration:
             config=mock_config,
             circuit_registry=mock_circuit_registry,
         )
-        await monitor._check_stuck_requests(timeout=5.0)
+        await monitor._check_stuck_requests(default_timeout=5.0)
 
         mock_circuit_registry.record_failure.assert_called_once()
         assert "Visibility timeout" in mock_circuit_registry.record_failure.call_args[0][0]
@@ -248,7 +253,7 @@ class TestVisibilityMonitorCircuitBreakerIntegration:
             config=mock_config,
             circuit_registry=mock_circuit_registry,
         )
-        await monitor._check_stuck_requests(timeout=5.0)
+        await monitor._check_stuck_requests(default_timeout=5.0)
 
         # Should not signal circuit breaker since request is being retried
         mock_circuit_registry.record_failure.assert_not_called()
@@ -265,11 +270,13 @@ class TestVisibilityMonitorMultipleRequests:
         request1.request_id = "request-1"
         request1.started_at = datetime.now(timezone.utc) - timedelta(seconds=10)
         request1.retry_count = 0
+        request1.routing_result = None
 
         request2 = MagicMock(spec=QueuedRequest)
         request2.request_id = "request-2"
         request2.started_at = datetime.now(timezone.utc) - timedelta(seconds=15)
         request2.retry_count = 0
+        request2.routing_result = None
 
         mock_queue.get_in_flight_snapshot.return_value = {
             "request-1": request1,
@@ -277,7 +284,7 @@ class TestVisibilityMonitorMultipleRequests:
         }
 
         monitor = VisibilityMonitor(queue=mock_queue, config=mock_config)
-        await monitor._check_stuck_requests(timeout=5.0)
+        await monitor._check_stuck_requests(default_timeout=5.0)
 
         assert mock_queue.requeue_for_retry.call_count == 2
 
@@ -289,18 +296,21 @@ class TestVisibilityMonitorMultipleRequests:
         retriable.request_id = "retriable"
         retriable.started_at = datetime.now(timezone.utc) - timedelta(seconds=10)
         retriable.retry_count = 0
+        retriable.routing_result = None
 
         # Request that is exhausted
         exhausted = MagicMock(spec=QueuedRequest)
         exhausted.request_id = "exhausted"
         exhausted.started_at = datetime.now(timezone.utc) - timedelta(seconds=10)
         exhausted.retry_count = 2  # At max
+        exhausted.routing_result = None
 
         # Recent request (not stuck)
         recent = MagicMock(spec=QueuedRequest)
         recent.request_id = "recent"
         recent.started_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         recent.retry_count = 0
+        recent.routing_result = None
 
         mock_queue.get_in_flight_snapshot.return_value = {
             "retriable": retriable,
@@ -313,7 +323,7 @@ class TestVisibilityMonitorMultipleRequests:
             config=mock_config,
             circuit_registry=mock_circuit_registry,
         )
-        await monitor._check_stuck_requests(timeout=5.0)
+        await monitor._check_stuck_requests(default_timeout=5.0)
 
         # Should requeue retriable
         mock_queue.requeue_for_retry.assert_called_once_with("retriable")

@@ -86,11 +86,14 @@ class VisibilityMonitor:
             except Exception as e:
                 logger.error(f"Visibility monitor error: {e}", exc_info=True)
 
-    async def _check_stuck_requests(self, timeout: float) -> None:
+    async def _check_stuck_requests(self, default_timeout: float) -> None:
         """Find and handle requests exceeding visibility timeout.
 
+        Uses classification-aware timeouts: IMAGE requests get longer timeouts
+        to avoid premature requeuing during diffusion model inference.
+
         Args:
-            timeout: Visibility timeout in seconds.
+            default_timeout: Default visibility timeout in seconds.
         """
         now = datetime.now(timezone.utc)
 
@@ -111,6 +114,11 @@ class VisibilityMonitor:
                 started_at = started_at.replace(tzinfo=timezone.utc)
 
             elapsed = (now - started_at).total_seconds()
+
+            # Get classification-aware timeout
+            classification = getattr(request.routing_result, 'classification', None) \
+                if request.routing_result else None
+            timeout = self._config.queue.get_visibility_timeout_for_classification(classification)
 
             if elapsed > timeout:
                 stuck_count += 1

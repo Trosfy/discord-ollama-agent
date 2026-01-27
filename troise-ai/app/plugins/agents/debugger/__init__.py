@@ -8,7 +8,7 @@ PLUGIN = {
     "class": DebuggerAgent,
     "description": "Fixes code issues identified by review or test failures",
     "category": "code",
-    "tools": ["brain_search", "read_file", "run_code"],
+    "tools": ["brain_search"],  # Debugs code passed in context - no filesystem access
     "config": {
         "temperature": 0.2,
         "max_tokens": 4096,
